@@ -1,0 +1,4 @@
+# Adds the SQLite-backed Iceberg catalog used only by the offline test suite
+# (a local catalog + local file:// warehouse; no AWS Glue/S3 calls).
+-r ../src/requirements.txt
+pyiceberg[sql-sqlite]==0.8.1

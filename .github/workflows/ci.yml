@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ingestion:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/ingestion
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/ingestion/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+  transformation:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/transformation
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Create venv with the offline Iceberg test dependencies
+        run: make venv PYTHON=python3
+      - name: Run the Silver transformation Python test suite (no AWS calls)
+        run: make test-python
+
+  terraform:
+    runs-on: ubuntu-latest
+    env:
+      # One pinned version for every job. The roots require >= 1.10 (S3 backend use_lockfile);
+      # this exact version was run against all four roots (fmt, init -backend=false, validate, test).
+      TF_VERSION: "1.11.4"
+    strategy:
+      matrix:
+        root:
+          [
+            infra/ingestion/storage,
+            infra/ingestion/compute,
+            infra/transformation/storage,
+            infra/transformation/compute,
+          ]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - run: terraform -chdir=${{ matrix.root }} fmt -check -recursive
+      - run: terraform -chdir=${{ matrix.root }} init -backend=false -input=false
+      - run: terraform -chdir=${{ matrix.root }} validate
+
+  terraform-test:
+    runs-on: ubuntu-latest
+    env:
+      TF_VERSION: "1.11.4"
+    strategy:
+      matrix:
+        root:
+          [
+            infra/ingestion/storage,
+            infra/ingestion/compute,
+            infra/transformation/storage,
+            infra/transformation/compute,
+          ]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - run: terraform -chdir=${{ matrix.root }} init -backend=false -input=false
+      - name: Offline checks (mock provider, no credentials)
+        run: terraform -chdir=${{ matrix.root }} test

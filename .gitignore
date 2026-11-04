@@ -1,0 +1,25 @@
+node_modules/
+dist/
+out/
+*.log
+
+# Python (apps/transformation)
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Terraform local state/secrets
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+terraform.tfvars.json
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+tfplan
+tfplan.*
+*.tfplan

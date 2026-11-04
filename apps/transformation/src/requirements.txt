@@ -1,0 +1,11 @@
+# Silver transformation Lambda dependencies.
+# pyiceberg + pyarrow exceed the Lambda zip/layer size limit, hence the
+# container image (see apps/transformation/Dockerfile).
+boto3==1.43.123
+pyarrow==18.1.0
+pyiceberg[glue,pyarrow]==0.8.1
+# Data-quality Lambda (quality_job.py): dbt tests on DuckDB. Pinned: the dbt project in
+# src/quality_dbt is written against this dbt-core / adapter pair.
+dbt-core==1.12.6
+dbt-duckdb==1.11.1
+duckdb==2.0.0

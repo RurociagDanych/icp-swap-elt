@@ -1,0 +1,9 @@
+icp_swap_quality:
+  target: lambda
+  outputs:
+    lambda:
+      type: duckdb
+      path: "{{ env_var('QUALITY_DUCKDB_PATH', '/tmp/quality/quality.duckdb') }}"
+      threads: 2
+      settings:
+        TimeZone: UTC

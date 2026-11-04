@@ -1,0 +1,30 @@
+# Copy to terraform.tfvars and fill in; terraform.tfvars is gitignored.
+# This root has a real 12-digit AWS account ID baked into IAM resource ARNs, so it must
+# never be committed filled in.
+
+aws_region     = "us-east-1"
+aws_account_id = "REPLACE_WITH_12_DIGIT_ACCOUNT_ID"
+
+# Existing raw bucket from infra/ingestion/storage (the ingestion stage).
+raw_bucket_name = "REPLACE_WITH_RAW_BUCKET_NAME"
+# raw_prefix = "icp-swap-elt"   # the default; must match infra/ingestion/compute's s3_prefix
+
+# Outputs from infra/transformation/storage.
+processed_bucket_name = "REPLACE_WITH_PROCESSED_BUCKET_NAME"
+glue_database_name    = "icp_swap_elt"
+
+# REQUIRED, no default. Permanent contract-version tag of the target table: choose once, never change.
+silver_target_generation = "REPLACE_WITH_GENERATION_TAG" # for example "g20261101"
+
+# REQUIRED unless container_image is set: the unique tag you pushed to the (IMMUTABLE) ECR repository,
+# for example the git commit SHA. Never "latest". Push first, then set it (docs/RUNBOOK.md, step 6.2).
+image_tag = "REPLACE_WITH_UNIQUE_IMAGE_TAG"
+
+# Environment tag value. The Stage tag (cost-allocation) is fixed to "transformation".
+# environment = "shared"
+
+# alert_email = "you@example.com"
+
+# Glue table optimizers stay disabled (default false). Table maintenance (compaction, snapshot
+# retention, orphan cleanup) runs in the job's compact step; see apps/transformation/README.md.
+# enable_table_optimizers = false

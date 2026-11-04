@@ -1,0 +1,52 @@
+aws_region  = "us-east-1"
+name_prefix = "icp-swap-elt-ingestion"
+
+# Required. Read this from infra/ingestion/storage outputs.
+bucket_name = "my-existing-raw-data-bucket"
+
+# Networking. Explicit by default: the stack no longer falls back to the account default VPC.
+# The task calls the Internet Computer and the ICPSwap API, so private subnets need a route to
+# the internet (NAT gateway); see docs/RUNBOOK.md, "Networking" for the optional VPC endpoints.
+vpc_id     = "vpc-REPLACE_ME"
+subnet_ids = ["subnet-REPLACE_ME_1", "subnet-REPLACE_ME_2"]
+# assign_public_ip = false   # the default; true only for public subnets without NAT
+
+# Dev profile (the current deployment, see docs/RUNBOOK.md "Networking"): the account default VPC and
+# its public subnets, with public IPs. Chosen for cost: a NAT gateway costs more per month than the
+# whole project's annual budget. Not for production; uncomment both lines and leave vpc_id/subnet_ids unset.
+# use_default_vpc  = true
+# assign_public_ip = true
+
+# Image. The ECR repository is IMMUTABLE: push every build under a unique tag (for example the git
+# commit SHA) and set it here. Never "latest". Alternatively set container_image to a full URI
+# pinned by digest (repo@sha256:...).
+image_tag       = "REPLACE_WITH_UNIQUE_IMAGE_TAG"
+container_image = ""
+
+# Scheduled runs use 'sync' (backfill-if-needed, then REST incremental against the
+# ICPSwap /transaction/find API). Run the one-time canister archive manually with
+# apps/ingestion/scripts/aws_build_push_and_run.sh --mode canister before relying on sync.
+container_command = [
+  "node",
+  "dist/index.js",
+  "--mode",
+  "sync",
+]
+
+s3_prefix           = "icp-swap-elt"
+schedule_expression = "cron(0 8 * * ? *)" # 08:00 UTC daily; "" disables scheduled runs
+
+# Bus that receives IngestionRunFinished (the transformation stack subscribes to it). "" disables it.
+# event_bus_name = "default"
+
+# Optional. Subscribe an email to failed-task alerts (confirm the subscription email after apply).
+alert_email = ""
+
+# Environment tag value (also provider default_tags). Do not set Environment through tags.
+# Use "prod" for production; "dev" for the dev profile.
+environment = "dev"
+
+tags = {
+  Owner      = "data-platform"
+  CostCenter = "analytics"
+}

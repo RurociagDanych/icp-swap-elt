@@ -1,0 +1,16 @@
+name: icp_swap_quality
+version: "1.0.0"
+config-version: 2
+profile: icp_swap_quality
+
+# Data-quality project run by the `quality` Lambda (apps/transformation/src/quality_job.py).
+# It only declares tests: the handler loads the Silver Iceberg tables into DuckDB as
+# main.icp_swap_events and main.token_dim, then runs `dbt test`. No packages are used (the
+# nothing is downloaded at run time); the generic tests below live in macros/.
+model-paths: ["models"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+
+flags:
+  send_anonymous_usage_stats: false
+  use_colors: false
