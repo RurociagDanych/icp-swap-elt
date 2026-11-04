@@ -1,0 +1,8 @@
+# Copy to backend.hcl (gitignored) and fill in; then:
+#   terraform init -backend-config=backend.hcl
+# The state bucket is created once, outside these roots (see docs/RUNBOOK.md, "Remote state").
+# The state key for this root (icp-swap-elt/transformation/storage/terraform.tfstate) is fixed in providers.tf.
+bucket = "REPLACE_WITH_STATE_BUCKET_NAME"
+region = "REPLACE_WITH_STATE_BUCKET_REGION"
+# Optional, if the state bucket uses SSE-KMS:
+# kms_key_id = "REPLACE_WITH_KMS_KEY_ARN"

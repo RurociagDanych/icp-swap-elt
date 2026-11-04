@@ -1,0 +1,31 @@
+{
+  "name": "icp-swap-elt",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Data pipeline monorepo for ICPSwap (Internet Computer DEX) data: the ingestion app extracts swap transactions from Internet Computer storage canisters and the ICPSwap REST API into Amazon S3 CSV, running on AWS Fargate; the transformation app normalizes the raw feeds into a deduplicated Iceberg fact table queryable from Amazon Athena.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RurociagDanych/icp-swap-elt"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "test": "node --import tsx --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-eventbridge": "^3.799.0",
+    "@aws-sdk/client-s3": "^3.799.0",
+    "@aws-sdk/lib-storage": "^3.799.0",
+    "@dfinity/agent": "^0.20.2",
+    "@dfinity/candid": "^0.20.2",
+    "@dfinity/principal": "^0.20.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

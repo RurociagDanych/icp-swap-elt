@@ -1,0 +1,28 @@
+aws_region  = "us-east-1"
+name_prefix = "icp-swap-elt-ingestion"
+
+# Optional. Leave empty to let Terraform create a deterministic name.
+bucket_name = ""
+
+# Days to keep noncurrent object versions before expiring them.
+noncurrent_version_expiration_days = 30
+
+# Environment tag value (also provider default_tags). Do not set Environment through tags.
+# Use "prod" for production; "dev" for the dev profile.
+environment = "dev"
+
+# Must equal s3_prefix of infra/ingestion/compute. <prefix>/canister/ and <prefix>/rest/ are
+# protected against deletion by a bucket-policy Deny.
+s3_prefix = "icp-swap-elt"
+
+# IAM role(s) allowed to delete ingested data deliberately (including full teardown).
+# Empty means nobody can, until the policy is changed. Example (placeholder, not a real role):
+# delete_exempt_principal_arns = ["arn:aws:iam::<ACCOUNT_ID>:role/<DATA_ADMIN_ROLE>"]
+
+# Optional: existing bucket for S3 server access logs of the raw bucket. Empty disables logging.
+# access_log_bucket_name = ""
+
+tags = {
+  Owner      = "data-platform"
+  CostCenter = "analytics"
+}

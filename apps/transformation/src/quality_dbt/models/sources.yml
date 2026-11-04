@@ -1,0 +1,100 @@
+version: 2
+
+# The two Silver Iceberg tables as loaded into DuckDB by quality_job.py.
+sources:
+  - name: silver
+    schema: main
+    tables:
+      - name: icp_swap_events
+        description: Deduplicated fact table, one row per event_id (contract silver-flat-v1).
+        columns:
+          - name: event_id
+            data_tests:
+              - not_null
+              - unique
+          - name: event_timestamp
+            data_tests:
+              - not_in_future
+              - recent:
+                  arguments:
+                    max_age_hours: 72
+                  config:
+                    severity: warn
+          - name: action
+            data_tests:
+              - not_null
+              - accepted_values:
+                  arguments:
+                    values: [swap, add_liquidity, increase_liquidity, decrease_liquidity, claim, unknown]
+          - name: contract_version
+            data_tests:
+              - not_null
+              - accepted_values:
+                  arguments:
+                    values: [silver-flat-v1]
+          - name: quality_status
+            data_tests:
+              - not_null
+              - accepted_values:
+                  arguments:
+                    values: [ok, unresolved, conflict]
+          - name: ingested_at
+            data_tests:
+              - not_null
+          - name: pool_id
+            data_tests:
+              - max_null_fraction:
+                  arguments:
+                    max_fraction: 0.01
+                  config:
+                    severity: warn
+          - name: token0_ledger_id
+            data_tests:
+              - max_null_fraction:
+                  arguments:
+                    max_fraction: 0.01
+                  config:
+                    severity: warn
+              - relationships:
+                  arguments:
+                    to: source('silver', 'token_dim')
+                    field: ledger_id
+                  config:
+                    severity: warn
+          - name: token1_ledger_id
+            data_tests:
+              - max_null_fraction:
+                  arguments:
+                    max_fraction: 0.01
+                  config:
+                    severity: warn
+              - relationships:
+                  arguments:
+                    to: source('silver', 'token_dim')
+                    field: ledger_id
+                  config:
+                    severity: warn
+          - name: token0_amount
+            data_tests:
+              - non_negative
+          - name: token1_amount
+            data_tests:
+              - non_negative
+          - name: amount_usd
+            data_tests:
+              - non_negative
+
+      - name: token_dim
+        description: Current symbol/name/standard/decimals per ledger.
+        columns:
+          - name: ledger_id
+            data_tests:
+              - not_null
+              - unique
+          - name: standard
+            data_tests:
+              - max_null_fraction:
+                  arguments:
+                    max_fraction: 0.05
+                  config:
+                    severity: warn

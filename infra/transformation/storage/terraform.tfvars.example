@@ -1,0 +1,17 @@
+# Copy to terraform.tfvars and fill in; terraform.tfvars is gitignored.
+
+aws_region = "us-east-1"
+# Environment tag value. The Stage tag (cost-allocation, used by the compute root budget) is fixed.
+# environment = "shared"
+
+# Leave the three bucket-name variables empty to get deterministic generated
+# names ("icp-swap-elt-processed-<account-id>-<region>", etc.), or set them
+# explicitly here.
+# processed_bucket_name      = ""
+# athena_results_bucket_name = ""
+# access_logs_bucket_name    = ""
+
+# Iceberg snapshot retention of the compute root (keep both equal) and the noncurrent-version
+# expiry of the processed bucket, which must be at least snapshot_retention_days + 30.
+# snapshot_retention_days                      = 7
+# processed_noncurrent_version_expiration_days = 90
