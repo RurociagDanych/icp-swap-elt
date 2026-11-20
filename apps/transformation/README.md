@@ -184,7 +184,7 @@ Glue/S3 calls, so it runs fully offline.
 
 ## Deploy
 
-Two Terraform roots, applied in order (see the repo root `README.md` / `docs/RUNBOOK.md`):
+Two Terraform roots, applied in order (see the repo root `README.md` / `docs/OPERATIONS.md`):
 
 1. `infra/transformation/storage` — the Iceberg warehouse/processed bucket, Athena
    query-results bucket, access-logs bucket, Glue database, and Athena workgroup.
@@ -429,7 +429,7 @@ ranges inside one year partition, so the selected-file count grew with every obj
 
 In the deployed pipeline the transformation is started by ingestion: each `IngestionRunFinished` event
 starts the `-incremental` state machine (resource `silver_incremental_load`) with `{"mode":"list","prefixes":[...]}` for exactly the prefixes
-the run wrote (see `docs/RUNBOOK.md`, section 7). The modes below are what that machinery and the ad-hoc
+the run wrote (see `docs/OPERATIONS.md`, section 7). The modes below are what that machinery and the ad-hoc
 tools invoke.
 
 
