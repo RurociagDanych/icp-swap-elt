@@ -1,13 +1,5 @@
-"""Unit tests for the raw-object routing helpers in write_planning (dependency-free).
+"""Unit tests for the raw-object routing helpers in write_planning (dependency-free)."""
 
-The legacy ``dedup_key`` / ``idempotent_delete_target`` helpers (source_path-scoped deletes,
-a Dataset-A composite key without the case/whitespace normalisation of the real identity)
-were dead code: production dedups on ``silver_contract.silver_identity`` (``event_id``). They
-were removed; their identity invariants are tested against ``silver_identity`` in
-test_silver_contract.py (``test_identity_invariants_formerly_tested_on_dedup_key``).
-
-Runnable without pytest: ``python3 test/test_write_planning.py``.
-"""
 import os
 import sys
 

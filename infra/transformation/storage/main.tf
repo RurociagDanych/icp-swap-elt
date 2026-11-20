@@ -17,8 +17,6 @@ locals {
   )
 }
 
-# --- Access-logs bucket (target for the other two buckets' server access logs) ----------------
-
 resource "aws_s3_bucket" "access_logs" {
   bucket = local.effective_access_logs_bucket_name
   tags   = local.common_tags
@@ -86,8 +84,6 @@ resource "aws_s3_bucket_lifecycle_configuration" "access_logs" {
   }
 }
 
-# --- Processed bucket: Iceberg warehouse (versioned; holds Silver data + quarantine) ----------
-
 resource "aws_s3_bucket" "processed" {
   bucket = local.effective_processed_bucket_name
   tags   = local.common_tags
@@ -145,7 +141,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "processed" {
     }
   }
 
-  # Temporary key manifests written by the load state machine's list step; never the warehouse.
+  # # Temporary key manifests written by the load state machine's list step; never the warehouse.
   rule {
     id     = "expire-list-manifests"
     status = "Enabled"
@@ -160,8 +156,6 @@ resource "aws_s3_bucket_lifecycle_configuration" "processed" {
     }
   }
 }
-
-# --- Athena query-results bucket ---------------------------------------------------------------
 
 resource "aws_s3_bucket" "athena_results" {
   bucket = local.effective_athena_results_bucket_name
@@ -228,8 +222,6 @@ resource "aws_s3_bucket_lifecycle_configuration" "athena_results" {
   }
 }
 
-# --- TLS-only bucket policies (every bucket this root owns) -----------------------------------
-
 locals {
   tls_only_buckets = {
     (local.effective_processed_bucket_name)      = aws_s3_bucket.processed.arn
@@ -267,13 +259,8 @@ resource "aws_s3_bucket_policy" "tls_only" {
   policy   = each.value.json
 }
 
-# --- Glue Iceberg catalog + Athena workgroup ----------------------------------------------------
-# Both are fresh resources owned by this root: the
-# Iceberg TABLES themselves (icp_swap_events, token_dim) are never Terraform-managed — the
-# registered transformation Lambda creates them lazily via pyiceberg's Glue catalog `create_table`
-# (apps/transformation/src/silver_persistence.py), the same way the ingestion side treats its
-# own S3 layout as application-owned rather than Terraform-owned.
-
+# # The Iceberg tables (icp_swap_events, token_dim) are never Terraform-managed: the transformation
+# # Lambda creates them lazily through pyiceberg's Glue catalog (apps/transformation).
 resource "aws_glue_catalog_database" "transformation" {
   name = var.glue_database_name
 

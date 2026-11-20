@@ -1,8 +1,10 @@
 import type { RestTx } from '../idl/restTx.js';
 
-// Canister `timestamp` fields are epoch SECONDS (e.g. 1695898747); the REST API's
-// `txTime` (and therefore the backfill seam/floor) is epoch MILLISECONDS. Convert
-// the newest canister timestamp to ms so the two feeds share one comparable unit.
+/**
+ * Canister `timestamp` fields are epoch SECONDS (e.g. 1695898747); the REST API's
+ * `txTime` (and therefore the backfill seam/floor) is epoch MILLISECONDS. Convert
+ * the newest canister timestamp to ms so the two feeds share one comparable unit.
+ */
 export function canisterSeamMs(maxTimestampSeconds: bigint): number {
   return Number(maxTimestampSeconds) * 1000;
 }

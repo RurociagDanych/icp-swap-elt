@@ -1,11 +1,4 @@
-"""Snapshot retention (both Silver tables) and orphan-file cleanup (``token_dim`` only).
-
-PyIceberg 0.8.1 has no expire-snapshots API, so ``table_maintenance`` commits a
-``RemoveSnapshotsUpdate`` through the public ``Catalog.commit_table`` (snapshot-fenced) and then
-deletes only the files that no retained snapshot reaches. The orphan cleanup deletes files below
-``token_dim``'s ``data/`` and ``metadata/`` that no snapshot or metadata file references AND that
-are older than a grace period. Offline: SQLite-backed catalog, ``file://`` warehouse.
-"""
+"""Snapshot retention (both Silver tables) and orphan-file cleanup (token_dim only)."""
 
 from __future__ import annotations
 
@@ -119,7 +112,7 @@ class SnapshotRetentionTests(MaintenanceBase):
         old_files = self.load_and_compact()
         before = self.rows(self.facts())
         current = self.facts().current_snapshot()
-        self.assertEqual(5, len(self.facts().metadata.snapshots))  # 4 appends + 1 compaction
+        self.assertEqual(5, len(self.facts().metadata.snapshots))
         with patch.dict(os.environ, {"SILVER_SNAPSHOTS_TO_RETAIN": "1"}):
             summary = expire_snapshots(self.facts(), now_ms=LATER_MS)
         table = self.facts()
@@ -128,12 +121,12 @@ class SnapshotRetentionTests(MaintenanceBase):
         self.assertEqual([current.snapshot_id], [s.snapshot_id for s in table.metadata.snapshots])
         self.assertEqual(current.snapshot_id, table.current_snapshot().snapshot_id)
         self.assertTrue(before.equals(self.rows(table)), "retention changed the current rows")
-        for path in old_files:  # only the expired snapshots reached the pre-compaction files
+        for path in old_files:
             self.assertFalse(local(path).exists(), path)
-        for task in table.scan().plan_files():  # everything the current snapshot reads survives
+        for task in table.scan().plan_files():
             self.assertTrue(local(task.file.file_path).exists())
         self.assertTrue(local(current.manifest_list).exists())
-        self.assertGreater(summary["files_deleted"], len(old_files))  # + manifest lists/manifests
+        self.assertGreater(summary["files_deleted"], len(old_files))
 
     def test_files_of_a_retained_snapshot_are_kept_and_time_travel_still_works(self):
         from table_maintenance import expire_snapshots
@@ -146,7 +139,7 @@ class SnapshotRetentionTests(MaintenanceBase):
         self.assertEqual(3, summary["expired"])
         table = self.facts()
         self.assertEqual(2, len(table.metadata.snapshots))
-        for path in old_files:  # still reachable from the retained pre-compaction snapshot
+        for path in old_files:
             self.assertTrue(local(path).exists(), path)
         rolled_back = table.scan(snapshot_id=last_append.snapshot_id).to_arrow()
         self.assertEqual(120, rolled_back.num_rows)
@@ -156,7 +149,7 @@ class SnapshotRetentionTests(MaintenanceBase):
 
         self.load_and_compact()
         location = self.facts().metadata_location
-        summary = expire_snapshots(self.facts())  # real now: everything is minutes old
+        summary = expire_snapshots(self.facts())
         self.assertEqual(0, summary["expired"])
         self.assertEqual(location, self.facts().metadata_location, "no commit without work")
 
@@ -199,9 +192,9 @@ class SnapshotRetentionTests(MaintenanceBase):
                 runs.append(expire_snapshots(self.facts(), now_ms=LATER_MS))
                 if runs[-1]["complete"]:
                     break
-        self.assertFalse(runs[0]["complete"])  # backlog reported, not raised
+        self.assertFalse(runs[0]["complete"])
         self.assertGreater(runs[0]["pending"], 0)
-        self.assertGreaterEqual(runs[0]["commits"], 2)  # bounded batches inside one run
+        self.assertGreaterEqual(runs[0]["commits"], 2)
         for run in runs:
             self.assertLessEqual(run["files_deleted"], 13)
         self.assertTrue(runs[-1]["complete"])
@@ -244,7 +237,7 @@ class SnapshotRetentionTests(MaintenanceBase):
         def commit(catalog, table, requirements, updates):  # noqa: D401
             calls["n"] += 1
             if calls["n"] == 1:
-                for path in old_files:  # nothing may be deleted before the commit landed
+                for path in old_files:
                     self.assertTrue(local(path).exists())
                 raise CommitFailedException("another writer committed first")
             return real_commit(catalog, table, requirements, updates)
@@ -283,7 +276,7 @@ class SnapshotRetentionTests(MaintenanceBase):
         def commit(catalog, table, requirements, updates):
             if not state["raced"]:
                 state["raced"] = True
-                self.ingest("racer.csv", wide_object(99))  # concurrent writer wins
+                self.ingest("racer.csv", wide_object(99))
             return real_commit(catalog, table, requirements, updates)
 
         with patch.object(SqlCatalog, "commit_table", commit), patch(
@@ -291,7 +284,7 @@ class SnapshotRetentionTests(MaintenanceBase):
         ), patch.dict(os.environ, {"SILVER_SNAPSHOTS_TO_RETAIN": "1"}):
             expire_snapshots(self.facts(), now_ms=LATER_MS)
         table = self.facts()
-        self.assertEqual(150, table.scan().to_arrow().num_rows)  # the racer's rows survive
+        self.assertEqual(150, table.scan().to_arrow().num_rows)
         self.assertEqual(1, len(table.metadata.snapshots))
 
     def test_expired_deadline_and_bad_limits_are_refused(self):
@@ -329,7 +322,7 @@ class OrphanCleanupTests(MaintenanceBase):
         dim = self.dim()
         root = local(dim.location())
         before = self.rows(dim)
-        self.age_everything(root)  # referenced files are old too: age alone never deletes
+        self.age_everything(root)
         old_data = self.junk(root / "data" / "00000-crashed-writer.parquet", old=True)
         old_meta = self.junk(root / "metadata" / "snap-crashed.avro", old=True)
         fresh = self.junk(root / "data" / "00000-uncommitted-writer.parquet", old=False)
@@ -342,7 +335,7 @@ class OrphanCleanupTests(MaintenanceBase):
         self.assertTrue(outside.exists(), "only data/ and metadata/ are ever listed")
         dim = self.catalog.load_table("synthetic.token_dim")
         self.assertTrue(before.equals(self.rows(dim)))
-        for snapshot in dim.metadata.snapshots:  # every snapshot is still fully readable
+        for snapshot in dim.metadata.snapshots:
             dim.scan(snapshot_id=snapshot.snapshot_id).to_arrow()
 
     def test_fact_table_is_refused(self):

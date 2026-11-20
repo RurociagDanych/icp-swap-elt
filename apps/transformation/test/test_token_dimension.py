@@ -168,8 +168,6 @@ def test_unrelated_standard_conflict_resolves_deterministically_instead_of_raisi
 
 
 def test_unrelated_symbol_conflict_resolves_deterministically_instead_of_raising():
-    """Undated contradicting symbols tie and the
-    lexicographically greater one wins, whatever the observation order."""
     ledger = "cngnf-vqaaa-aaaar-qag4q-cai"
     for first, second in (("ckUSDT", "DIFFERENT"), ("DIFFERENT", "ckUSDT")):
         observations = [

@@ -1,4 +1,4 @@
-"""Real standard-library CSV boundary for flat-Silver normalization."""
+"""Standard-library CSV boundary for flat-Silver normalization."""
 
 from __future__ import annotations
 

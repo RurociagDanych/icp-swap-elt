@@ -1,11 +1,9 @@
-"""Cross-object lookup correctness: thread-safe PyIceberg planning, lookup diagnostics and the
-post-commit single-row verification.
+"""Cross-object lookup correctness: thread-safe PyIceberg planning, lookup diagnostics and post-commit verification.
 
-The hazard guarded against: PyIceberg 0.8.1
-``DataScan.plan_files`` evaluates every manifest on a thread pool but shares ONE
-``_InclusiveMetricsEvaluator`` whose per-file bounds live in instance attributes, so
-concurrent files read each other's bounds and the file that holds the previous object's
-boundary row is intermittently pruned from the lookup.
+Guarded hazard: PyIceberg 0.8.1 ``DataScan.plan_files`` evaluates every manifest on a thread pool
+but shares ONE ``_InclusiveMetricsEvaluator`` whose per-file bounds live in instance attributes,
+so concurrent files read each other's bounds and the file holding the previous object's boundary
+row is intermittently pruned from the lookup.
 """
 
 from __future__ import annotations
@@ -93,8 +91,7 @@ class CrossObjectLookupBase(unittest.TestCase):
 
 class ThreadSafePlanningTests(CrossObjectLookupBase):
     def seed_many_objects(self, count=24):
-        """``count`` consecutive objects, newest-first like Dataset A, each its own commit
-        (one manifest per snapshot), consecutive objects sharing one boundary row."""
+        """``count`` consecutive objects, newest-first like Dataset A, each its own commit; neighbours share one boundary row."""
         self.objects = []
         for n in range(count):
             lo = n * 299
@@ -152,9 +149,6 @@ class ThreadSafePlanningTests(CrossObjectLookupBase):
 
 
     def test_consecutive_objects_sharing_a_boundary_row_never_store_it_twice(self):
-        """End to end through ``ingest_one`` (under forced thread interleaving):
-        the Dataset A shape, 24 consecutive objects each re-listing the
-        previous object's newest row as its oldest one, many manifests in the table."""
         objects = self.seed_many_objects(24)
         old = sys.getswitchinterval()
         sys.setswitchinterval(1e-6)
@@ -168,8 +162,7 @@ class ThreadSafePlanningTests(CrossObjectLookupBase):
         self.assertEqual(24 * 299 + 1, len(ids))
 
     def test_inclusive_metrics_evaluator_is_safe_when_two_threads_share_one_instance(self):
-        """Deterministic version of the race: thread A is paused between loading file A's
-        bounds and reading them while thread B evaluates file B on the SAME evaluator."""
+        """Deterministic version of the race: thread A pauses between loading file A's bounds and reading them while thread B evaluates file B on the SAME evaluator."""
         from pyiceberg.expressions import GreaterThanOrEqual
         from pyiceberg.expressions.visitors import _InclusiveMetricsEvaluator
         from pyiceberg.manifest import DataFile
@@ -254,8 +247,7 @@ class LookupDiagnosticsAndVerificationTests(CrossObjectLookupBase):
         self.assertNotEqual(snapshot, replay["lookup"]["snapshot_id"])
 
     def test_post_commit_verification_fails_closed_on_a_stored_duplicate(self):
-        """A lookup that misses (whatever the cause) must not stay silent: the object that
-        introduced the duplicate is failed, nothing is auto-deleted."""
+        """A lookup that misses (whatever the cause) must not stay silent: the object that introduced the duplicate is failed, nothing is auto-deleted."""
         import silver_persistence
         from silver_persistence import IngestionError
 
@@ -317,7 +309,6 @@ class LookupDiagnosticsAndVerificationTests(CrossObjectLookupBase):
     def test_verification_covers_rewritten_conflict_survivors(self):
         first = self.ingest("a.csv", [b_row("h-c", self.T0)])
         self.assertEqual(1, first["rows_written"])
-        # same tx_hash and instant, different payload => conflict rewrite (delete + append)
         changed = f"h-c,{self.T0},Claim,pool,alice,pool,ledger0,ledger1,0,0,0,2"
         second = self.ingest("b.csv", [changed])
         self.assertEqual(1, second["rows_written"])

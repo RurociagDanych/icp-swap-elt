@@ -3,7 +3,6 @@ dist
 .git
 out
 *.log
-# secrets / local config
 .env
 .env.*
 *.env
@@ -11,6 +10,5 @@ out
 *.tfstate
 *.tfstate.*
 *.tfvars
-# not needed in the image
 tests
 scripts

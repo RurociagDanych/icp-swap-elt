@@ -1,10 +1,4 @@
-"""token_dim "current value" semantics: latest observed wins (single ``as_of``).
-
-Real PyIceberg SQLite catalog + file:// warehouse (no mocks of the table layer). Covers a
-Dataset A object carrying two symbols for one renamed ledger, replay safety, deterministic
-(never raising) tie-breaks and the bounded file count. The conflict rules and the schema
-checks have their own module, ``test_token_dim_as_of.py``.
-"""
+"""token_dim current-value semantics: latest observed wins (single as_of)."""
 
 from __future__ import annotations
 
@@ -40,11 +34,11 @@ IDENT = "synthetic.token_dim"
 
 # Two real renamed ledgers, with their real timestamps.
 LUV = "6ohjj-4qaaa-aaaai-aapua-cai"
-LUV_OLD, LUV_OLD_TS = "01", 1683886069  # 2023-05-12
-LUV_NEW, LUV_NEW_TS = "LUV", 1695313142  # 2023-09-21
+LUV_OLD, LUV_OLD_TS = "01", 1683886069
+LUV_NEW, LUV_NEW_TS = "LUV", 1695313142
 CARROT = "2qrsq-uiaaa-aaaai-aa3zq-cai"
-CARROT_OLD, CARROT_OLD_TS = "\U0001f955", 1683832425  # 2023-05-11
-CARROT_NEW, CARROT_NEW_TS = "\U0001f430\U0001f955", 1695887064  # 2023-09-28
+CARROT_OLD, CARROT_OLD_TS = "\U0001f955", 1683832425
+CARROT_NEW, CARROT_NEW_TS = "\U0001f430\U0001f955", 1695887064
 OTHER = "ryjl3-tyaaa-aaaaa-aaaba-cai"
 
 A_HEADER = (
@@ -62,13 +56,11 @@ def utc(seconds):
 
 
 def a_object(*rows):
-    """rows: (ts_seconds, ledger, symbol) -> an A-style object (token0 only)."""
     lines = [A_HEADER] + [f"{ts},{ledger},{sym},,,,,," for ts, ledger, sym in rows]
     return ("\n".join(lines) + "\n").encode()
 
 
 def b_object(*rows):
-    """rows: (ts_ms, ledger, symbol, name) -> a B-style object (token0 only)."""
     lines = [B_HEADER] + [f"{ts},{ledger},{sym},{name},,," for ts, ledger, sym, name in rows]
     return ("\n".join(lines) + "\n").encode()
 
@@ -79,8 +71,6 @@ def observe(content, dataset="A"):
 
 
 def labels(table):
-    """Final dim as a comparable, order-free structure:
-    (ledger_id, symbol, name, standard, decimals, as_of)."""
     table.refresh()
     rows = table.scan().to_arrow().to_pylist()
     return sorted(
@@ -152,22 +142,19 @@ class ExtractTimestampTests(unittest.TestCase):
 
     def test_missing_or_invalid_timestamp_is_none_not_an_error(self):
         content = (
-            "token0_id,token0_symbol\nL1,X\n"  # no timestamp column
+            "token0_id,token0_symbol\nL1,X\n"
         ).encode()
         self.assertIsNone(observe(content)[0]["timestamp"])
         bad = a_object(("not-a-number", LUV, "X"), (-5, LUV, "X"), ("", LUV, "X"))
         self.assertEqual([None, None, None], [o["timestamp"] for o in observe(bad)])
 
     def test_standard_and_decimals_only_observations_are_dated_too(self):
-        """One as_of orders every attribute, so a row that supplies only standard
-        or decimals carries its event timestamp as well."""
         content = b"timestamp,token0_id,token0_standard,token0_decimals\n77,L1,ICRC2,8\n"
         self.assertEqual(utc(77), observe(content)[0]["timestamp"])
 
 
 class LatestWinsTests(Base):
     def test_real_renamed_ledgers_in_one_a_object_latest_wins(self):
-        """Two symbols for one ledger inside ONE Dataset A object: the latest one wins."""
         dim = self.fresh_dim()
         content = a_object(
             (LUV_OLD_TS, LUV, LUV_OLD),
@@ -184,11 +171,9 @@ class LatestWinsTests(Base):
         self.assertEqual(utc(LUV_NEW_TS), got[LUV][5])
         self.assertEqual(CARROT_NEW, got[CARROT][1])
         self.assertEqual(utc(CARROT_NEW_TS + 9), got[CARROT][5])
-        self.assertIsNone(got[LUV][2])  # A rows carry no name
+        self.assertIsNone(got[LUV][2])
 
     def test_synthetic_file_with_the_real_symbol_conflict_pattern_loads(self):
-        """The scan finds exactly the symbol conflicts in the file, and the object loads
-        with the latest symbol per ledger."""
         path = self.base / "0000_pool.csv"
         rows = []
         for i in range(30):
@@ -220,9 +205,9 @@ class LatestWinsTests(Base):
         for seed in range(12):
             rng = random.Random(seed)
             ledgers = [f"ledger-{i}" for i in range(4)]
-            events = []  # (ts, ledger, symbol, standard, decimals)
+            events = []
             for _ in range(40):
-                ts = rng.randrange(1_600_000_000, 1_600_000_030)  # small range: real ties
+                ts = rng.randrange(1_600_000_000, 1_600_000_030)
                 events.append(
                     (ts, rng.choice(ledgers), f"S{rng.randrange(5)}",
                      rng.choice(["ICRC1", "ICRC2", "DIP20", "ICP", "ICRC2"]),
@@ -248,7 +233,7 @@ class LatestWinsTests(Base):
                 objects.append(("\n".join(lines) + "\n").encode())
             order = list(objects)
             rng.shuffle(order)
-            order += rng.sample(objects, k=min(3, len(objects)))  # replays
+            order += rng.sample(objects, k=min(3, len(objects)))
             dim = self.fresh_dim(f"synthetic.prop_{seed}")
             for content in order:
                 apply_metadata(dim, observe(content))
@@ -296,7 +281,7 @@ class LatestWinsTests(Base):
         apply_metadata(dim, observe(a_object((500, LUV, "Y"))))
         self.assertEqual("Y", labels(dim)[0][1])
         snapshot = dim.current_snapshot().snapshot_id
-        apply_metadata(dim, observe(a_object((500, LUV, "X"))))  # the loser changes nothing
+        apply_metadata(dim, observe(a_object((500, LUV, "X"))))
         self.assertEqual(snapshot, dim.current_snapshot().snapshot_id)
         self.assertEqual("Y", labels(dim)[0][1])
 
@@ -317,7 +302,6 @@ class LatestWinsTests(Base):
         got = {row[0]: row for row in labels(dim)}
         self.assertEqual(8, got["L1"][4])
         self.assertEqual("ICRC2", got["L2"][3])
-        # vs the existing row: a newer object replaces, an older one only fills
         apply_metadata(
             dim, observe(b"timestamp,token0_id,token0_decimals,token0_standard\n10,L3,6,ICRC1\n")
         )
@@ -342,12 +326,10 @@ class LatestWinsTests(Base):
     def test_undated_observations_are_lowest_priority(self):
         undated = b"token0_id,token0_symbol\n" + LUV.encode() + b",UNDATED\n"
         dated = a_object((100, LUV, "DATED"))
-        # fills an empty ledger
         dim = self.fresh_dim("synthetic.u1")
         apply_metadata(dim, observe(undated))
         row = labels(dim)[0]
         self.assertEqual(("UNDATED", None), (row[1], row[5]))
-        # a dated observation replaces it, in either order
         apply_metadata(dim, observe(dated))
         self.assertEqual(("DATED", utc(100)), (labels(dim)[0][1], labels(dim)[0][5]))
         dim = self.fresh_dim("synthetic.u2")
@@ -355,16 +337,14 @@ class LatestWinsTests(Base):
         report = apply_metadata(dim, observe(undated))
         self.assertEqual([], report["changed_ledgers"])
         self.assertEqual("DATED", labels(dim)[0][1])
-        # undated and dated in the SAME object: dated wins
         dim = self.fresh_dim("synthetic.u3")
         mixed = observe(undated) + observe(dated)
         apply_metadata(dim, mixed)
         self.assertEqual("DATED", labels(dim)[0][1])
-        # two contradicting undated labels tie: the greater one wins
         dim = self.fresh_dim("synthetic.u4")
         apply_metadata(dim, observe(undated))
         apply_metadata(dim, observe(b"token0_id,token0_symbol\n" + LUV.encode() + b",OTHER\n"))
-        self.assertEqual("UNDATED", labels(dim)[0][1])  # "UNDATED" > "OTHER"
+        self.assertEqual("UNDATED", labels(dim)[0][1])
         candidates = _unique_candidates(
             observe(undated) + observe(b"token0_id,token0_symbol\n" + LUV.encode() + b",OTHER\n")
         )
@@ -418,8 +398,6 @@ def append_files(table, count, *, wide=False):
 
 
 def wide_object(n):
-    """An A object whose three ledgers are new and span the whole id range, so every
-    earlier dim file must be selected by ``In(ledger_id, ...)`` (no stats pruning)."""
     return a_object(
         *[(1_700_000_000 + n, f"{p}-{n:03d}", f"S{n}") for p in ("aaa", "mmm", "zzz")]
     )
@@ -443,7 +421,6 @@ class FileCountBoundTests(Base):
         )
 
     def test_ascending_timestamp_worst_case_250_objects_stays_bounded(self):
-        """Worst case: every object advances the as-of of ~90 of 300 ledgers."""
         self._ascending(universe=300, per_object=90, objects=250)
 
     def test_ascending_timestamp_sparse_mix_stays_within_the_file_cap(self):
@@ -498,7 +475,6 @@ class FileCountBoundTests(Base):
         dim.refresh()
         snapshot = dim.current_snapshot().snapshot_id
         before = labels(dim)
-        # an undated observation of the stored value changes nothing
         report = apply_metadata(dim, observe(a_object(("", "filler-0001", "F"))))
         self.assertEqual([], report["changed_ledgers"])
         dim.refresh()
@@ -507,7 +483,7 @@ class FileCountBoundTests(Base):
 
     def test_commit_over_the_trigger_compacts_to_one_file_and_keeps_other_rows(self):
         dim = self.fresh_dim()
-        append_files(dim, DEFAULT_LIMITS["max_files"] + 6, wide=True)  # past the file cap
+        append_files(dim, DEFAULT_LIMITS["max_files"] + 6, wide=True)
         self.assertGreater(data_files(dim), DEFAULT_LIMITS["max_files"])
         before = {row[0]: row for row in labels(dim)}
         report = apply_metadata(dim, observe(a_object((5, "brand-new", "NEW"))))
@@ -547,7 +523,7 @@ class FileCountBoundTests(Base):
 
     def test_rows_and_bytes_caps_still_fail_closed_on_the_compaction_path(self):
         dim = self.fresh_dim()
-        append_files(dim, DEFAULT_LIMITS["compact_files"] + 2, wide=True)  # 30 rows
+        append_files(dim, DEFAULT_LIMITS["compact_files"] + 2, wide=True)
         snapshot, rows = dim.current_snapshot().snapshot_id, labels(dim)
         obs = observe(a_object((5, "brand-new", "NEW")))
         for limits in ({"max_rows": 3}, {"max_bytes": 1}):
@@ -566,7 +542,7 @@ class FileCountBoundTests(Base):
     def test_duplicate_ledger_rows_fail_closed_on_the_compaction_path(self):
         dim = self.fresh_dim()
         append_files(dim, 3)
-        append_files(dim, 1)  # filler-0000 a second time, in another file
+        append_files(dim, 1)
         with self.assertRaisesRegex(MetadataError, "duplicate"):
             apply_metadata(
                 dim,
@@ -591,7 +567,7 @@ class FileCountBoundTests(Base):
 
         with patch.object(self.catalog, "commit_table", racing_commit):
             report = apply_metadata(dim, observe(a_object((9, "mine", "MINE"))))
-        self.assertGreaterEqual(len(calls), 2)  # first commit lost, retried on a refresh
+        self.assertGreaterEqual(len(calls), 2)
         self.assertEqual(["mine"], report["changed_ledgers"])
         final = {row[0]: row for row in labels(dim)}
         self.assertEqual("RIVAL", final["rival-ledger"][1])
@@ -601,7 +577,6 @@ class FileCountBoundTests(Base):
 
 
 def _scan_conflicts(path):
-    """Scan a Dataset A file for ledgers that carry more than one symbol (aliasing)."""
     import csv
     from collections import defaultdict
 

@@ -1,5 +1,3 @@
-# Offline checks (mock provider) for the quality Lambda and the Glue table optimizers.
-
 mock_provider "aws" {
   mock_data "aws_partition" {
     defaults = {
@@ -63,14 +61,12 @@ mock_provider "aws" {
 }
 
 variables {
-  aws_account_id        = "123456789012"
-  raw_bucket_name       = "raw-bucket"
-  processed_bucket_name = "processed-bucket"
-  glue_database_name    = "icp_swap_elt"
-  # Required inputs without module defaults.
+  aws_account_id           = "123456789012"
+  raw_bucket_name          = "raw-bucket"
+  processed_bucket_name    = "processed-bucket"
+  glue_database_name       = "icp_swap_elt"
   silver_target_generation = "g20261101"
   image_tag                = "test-1"
-  # No schedules (the mock provider yields no valid ARNs for scheduler targets).
 }
 
 run "quality_lambda_runs_the_same_image_with_the_quality_entrypoint" {

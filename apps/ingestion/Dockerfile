@@ -1,4 +1,3 @@
-# Build context is apps/ingestion (package.json, package-lock.json, tsconfig.json and src/ live there).
 # NOTE: node:22-slim is a floating tag. Pin it by digest (node:22-slim@sha256:<digest>) for
 # reproducible builds; the digest is NOT VERIFIED here (it cannot be resolved offline and
 # must not be guessed) - look it up with `docker buildx imagetools inspect node:22-slim`.

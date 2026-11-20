@@ -33,7 +33,7 @@ test('fetchTransactions retries then throws on non-200 wrapper code', async () =
   let calls = 0;
   const fake = async () => { calls++; return { ok: true, status: 200, json: async () => ({ code: 500, message: 'boom', data: null }) }; };
   await assert.rejects(() => fetchTransactions(base, () => {}, fake), /boom/);
-  assert.equal(calls, 5); // withRetry default attempts
+  assert.equal(calls, 5);
 });
 
 test('fetchTransactions aborts a hung request after the per-attempt timeout', { timeout: 5000 }, async () => {
@@ -45,7 +45,7 @@ test('fetchTransactions aborts a hung request after the per-attempt timeout', { 
     });
   };
   await assert.rejects(() => fetchTransactions(base, () => {}, hang, { timeoutMs: 20, attempts: 2 }), /time|abort/i);
-  assert.equal(calls, 2); // a timeout is retryable, one signal per attempt
+  assert.equal(calls, 2);
 });
 
 test('default REST timeout is 30 seconds', () => {

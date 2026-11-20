@@ -1,31 +1,3 @@
-# infra/transformation/compute — compute + orchestration for the transformation
-# (Silver) stage: one container image serves three Lambda functions (the small incremental transformation
-# `silver` and the large one-time-reload `silver_backfill`, both entrypoint silver_job.handler; and the
-# the dbt data-quality checks, entrypoint quality_job.handler), fronted by an SQS dead-letter
-# queue, least-privilege IAM, an EventBridge rule on IngestionRunFinished, and
-# CloudWatch-alarm-driven SNS failure alerting — the same
-# building blocks infra/ingestion/compute uses for the ingestion stage, adapted from ECS/
-# Fargate to Lambda because this stage is short, bursty, and event-driven rather than a
-# long-running daily job.
-#
-# Design invariants binding on anything built from this root:
-#   1. icp_swap_events is only ever written by the registered transformation Lambdas (modes: list,
-#      incremental, backfill_file, token_metadata; `silver_backfill` runs backfill_file for the
-#      reload state machine). Dedup is by event_id against the table itself (no side index —
-#      apps/transformation/README.md). Table maintenance (compaction, snapshot expiry, orphan
-#      files) is done by Glue Data Catalog table optimizers, not by any function of ours; the
-#      Lambda role has no glue:CreateTable/DeleteTable grant beyond what the load needs.
-#   2. token_dim (one current-value row per ledger; latest observation wins under a single
-#      `as_of` column, conflicts resolved deterministically and reported) is an
-#      application-code invariant; its 6-column schema is created by the transformation, never by Terraform.
-#   3. The hidden partition transform on icp_swap_events is YEAR, not DAY (see
-#      apps/transformation/src/silver_persistence.py) — chosen to avoid the
-#      small-files problem a daily partition produces at this table's write volume.
-#
-# The raw bucket is an EXPLICIT INPUT, never recreated: `raw_bucket_name` is a plain
-# variable pointing at the pre-existing bucket managed by infra/ingestion/storage (the
-# ingestion stage). This root creates no S3 bucket of its own.
-
 variable "aws_region" {
   type    = string
   default = "us-east-1"
@@ -57,8 +29,6 @@ variable "environment" {
   }
 }
 
-# --- Preserved raw storage (input only — never recreated) --------------------------------------
-
 variable "raw_bucket_name" {
   type        = string
   description = "Existing raw/source bucket owned by the ingestion stage (infra/ingestion/storage). Not managed by this root: no aws_s3_bucket resource, no data \"aws_s3_bucket\" lookup either (that would be an AWS API call/account discovery at plan time) — just a plain ARN-building input."
@@ -74,8 +44,6 @@ variable "raw_prefix" {
   default     = "icp-swap-elt"
   description = "Must match infra/ingestion/compute's s3_prefix (default \"icp-swap-elt\") - this is where the transformation Lambdas list and read raw CSV objects from. If you change it in one root, change it in the other."
 }
-
-# --- Inputs from infra/transformation/storage -------------------------------------------
 
 variable "processed_bucket_name" {
   type = string
@@ -94,8 +62,6 @@ variable "token_table_name" {
   type    = string
   default = "token_dim"
 }
-
-# --- transformation Lambdas (container image; `silver` small / `silver_backfill` large) ---------------------------
 
 variable "container_image" {
   type        = string
@@ -187,7 +153,7 @@ variable "silver_target_generation" {
 variable "silver_max_source_bytes" {
   type        = number
   description = "Guard rail on a single source object's size before an transformation Lambda will process it. Sized from the largest known source objects: ~103 MB (largest canister-archive CSV) and ~33 MB (largest daily REST-incremental CSV). 200 MiB gives margin over both."
-  default     = 209715200 # 200 MiB
+  default     = 209715200
 }
 
 variable "silver_max_source_rows" {
@@ -208,12 +174,9 @@ variable "silver_backfill_deadline_seconds" {
   default     = 840
 }
 
-# Bounds of the event_id lookup scan (apps/transformation/src/silver_persistence.py). The code
-# defaults (64 files / 250,000 rows / 128 MiB) are sized for the small incremental function. A
-# 200k-row object's lookup also reads the neighbouring objects that share its boundary event days,
-# and an exact replay (e.g. a Step Functions retry after an acknowledgement loss) of one such object
-# can select ~400k rows, so the backfill function gets wider caps. The scan
-# is streamed batch by batch, so these caps bound work, not resident memory.
+# # Bounds of the event_id lookup scan. The code defaults are sized for the small incremental function;
+# # an exact replay of a 200k-row object can select ~400k rows, so the backfill gets wider caps.
+# # The scan is streamed batch by batch, so these caps bound work, not resident memory.
 variable "silver_backfill_max_selected_files" {
   type        = number
   default     = 64
@@ -228,7 +191,7 @@ variable "silver_backfill_max_selected_rows" {
 
 variable "silver_backfill_max_selected_bytes" {
   type        = number
-  default     = 536870912 # 512 MiB
+  default     = 536870912
   description = "SILVER_MAX_SELECTED_BYTES for the silver_backfill function: max parquet bytes one object's event_id lookup may select (fail-closed)."
 }
 
@@ -236,8 +199,6 @@ variable "token_metadata_max_response_bytes" {
   type    = number
   default = 4194304 # 4 MiB, well under the 6 MiB Lambda synchronous-invoke response limit
 }
-
-# --- Quality Lambda (same image, different entrypoint: dbt tests on DuckDB; last step of both state machines) ---
 
 variable "quality_memory_size_mb" {
   type        = number
@@ -260,8 +221,6 @@ variable "quality_deadline_seconds" {
   default     = 780
   description = "Soft deadline of the scan inside the handler; must stay below quality_timeout_seconds."
 }
-
-# --- Glue table optimizers (managed Iceberg maintenance) -----------------------------------
 
 variable "enable_table_optimizers" {
   type        = bool
@@ -317,8 +276,6 @@ variable "log_retention_days" {
   type    = number
   default = 30
 }
-
-# --- Orchestration --------------------------------------------------------------------------
 
 variable "trigger_on_ingestion_events" {
   type        = bool
@@ -376,8 +333,6 @@ variable "tags" {
   default = {}
 }
 
-# In-job compaction of icp_swap_events (apps/transformation/src/fact_compaction.py), run by the
-# CompactTable step after the backfill Map and, above a threshold, by the per-object path.
 variable "silver_backfill_compact_target_file_rows" {
   type        = number
   default     = 250000

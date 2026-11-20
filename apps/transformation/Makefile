@@ -5,9 +5,9 @@ PYTHON_TESTS := $(sort $(wildcard test/test_*.py))
 
 help:
 	@echo "Targets:"
-	@echo "  make venv         # create .venv and install test/requirements.txt"
-	@echo "  make test-python  # run every test/test_*.py as a standalone script"
-	@echo "  make docker-build # build the transformation + quality Lambda container image"
+	@echo "  make venv          - create .venv and install test/requirements.txt"
+	@echo "  make test-python   - run every test/test_*.py as a standalone script"
+	@echo "  make docker-build  - build the transformation + quality Lambda container image"
 
 venv:
 	$(PYTHON) -m venv .venv

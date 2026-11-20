@@ -11,7 +11,7 @@ const tx = (txHash: string, txTime: number) => ({ txHash, txTime } as RestTx);
 test('canisterSeamMs converts canister epoch-seconds to REST-comparable ms', () => {
   // Canister timestamps are seconds (e.g. 1695898747 = 2023-09-28); the REST feed
   // and the backfill seam are ms. Regression guard for the seconds-vs-ns seam bug
-  // that produced canisterMaxTxTime=1780 (≈1970) instead of ~1.78e12.
+  // that produced canisterMaxTxTime=1780 (about 1970) instead of ~1.78e12.
   assert.equal(canisterSeamMs(1695898747n), 1695898747000);
   assert.equal(canisterSeamMs(0n), 0);
 });
@@ -37,8 +37,8 @@ test('isShortPage detects a partial page', () => {
 });
 
 test('reachedWatermark accounts for overlap', () => {
-  assert.equal(reachedWatermark([tx('a', 500), tx('b', 90)], 100, 20), false); // 90 <= 80? no
-  assert.equal(reachedWatermark([tx('a', 500), tx('b', 70)], 100, 20), true);  // 70 <= 80 -> true
+  assert.equal(reachedWatermark([tx('a', 500), tx('b', 90)], 100, 20), false);
+  assert.equal(reachedWatermark([tx('a', 500), tx('b', 70)], 100, 20), true);
 });
 
 test('maxTxTime returns the largest txTime or fallback', () => {

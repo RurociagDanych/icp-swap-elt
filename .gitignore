@@ -3,13 +3,11 @@ dist/
 out/
 *.log
 
-# Python (apps/transformation)
 .venv/
 __pycache__/
 *.pyc
 *.egg-info/
 
-# Terraform local state/secrets
 .terraform/
 *.tfstate
 *.tfstate.*

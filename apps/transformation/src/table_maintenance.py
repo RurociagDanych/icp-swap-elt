@@ -1,34 +1,22 @@
-"""Post-load Iceberg maintenance in our own job: snapshot retention and orphan-file cleanup.
+"""Post-load Iceberg maintenance: snapshot retention and orphan-file cleanup, run from the ``compact`` mode only.
 
-Replaces what the Glue table optimizers used to do (they are not relied on: they run on their
-own schedule and commit concurrently with our writers). Run only from the ``compact`` mode,
-serially after the backfill Map, never from a per-object path.
+Replaces the Glue table optimizers (not relied on: they run on their own schedule and commit
+concurrently with our writers). Never called from a per-object path.
 
-Snapshot retention (``expire_snapshots``, both tables)
-    PyIceberg 0.8.1 has no expire-snapshots API: ``RemoveSnapshotsUpdate`` exists as a model but
-    no metadata-update handler is registered for it. ``install()`` registers one (removes the
-    snapshots, prunes the snapshot log like Iceberg Java, refuses to remove a snapshot that a
-    branch/tag references) and the expiry is committed through the public
-    ``Catalog.commit_table`` with ``AssertTableUUID`` + ``AssertRefSnapshotId(main)``: a writer
-    that commits in between makes the catalog reject it (``CommitFailedException``), and the
-    expiry is re-planned. Expired = older than ``SILVER_SNAPSHOT_RETENTION_DAYS`` and not among
-    the newest ``SILVER_SNAPSHOTS_TO_RETAIN``, not current, not referenced by a ref. Only AFTER a
-    confirmed commit are the files deleted that the expired snapshots reach and no retained
-    snapshot reaches (manifest lists, manifests, live data files); an unknown commit outcome
-    deletes nothing.
+Snapshot retention (both tables): PyIceberg 0.8.1 has no expire-snapshots API, so ``install()``
+registers a ``RemoveSnapshotsUpdate`` handler and the expiry is committed through
+``Catalog.commit_table`` with ``AssertTableUUID`` + ``AssertRefSnapshotId(main)``: a concurrent
+writer makes the catalog reject it and the expiry is re-planned. Files are deleted only AFTER a
+confirmed commit and only if no retained snapshot reaches them; an unknown outcome deletes nothing.
 
-Orphan cleanup (``remove_orphan_files``, ``token_dim`` only)
-    Lists ``<location>/data/`` and ``<location>/metadata/`` (nothing else: the fact table keeps
-    unreferenced quarantine artifacts beside its data and is refused outright), then loads the
-    table metadata, and deletes a file only if no snapshot (every manifest entry, live or
-    deleted), the current metadata file or the metadata log references it AND it is older than
-    ``SILVER_ORPHAN_GRACE_DAYS``: a writer that has not committed yet has files that look
-    orphaned, the grace period (>= 1 day, a Lambda runs <= 15 min) keeps them.
+Orphan cleanup (``token_dim`` only): lists ``<location>/data/`` and ``<location>/metadata/`` only
+(the fact table keeps quarantine artifacts beside its data and is refused outright) and deletes a
+file only if nothing references it AND it is older than ``SILVER_ORPHAN_GRACE_DAYS``: a writer
+that has not committed yet has files that look orphaned.
 
-Both are bounded per run (manifests read, files listed, files deleted per run) and
-deadline-checked. A backlog larger than one run's bounds is reported (``complete: false`` with a
-pending count) and continued by the next run (daily and after every load); it is not an error.
-A cap that a single unit of work exceeds (one snapshot, the listing) is refused fail-closed.
+Both are bounded per run and deadline-checked. A larger backlog is reported (``complete: false``,
+pending count) and continued by the next run; it is not an error. A cap that one unit of work
+exceeds is refused fail-closed.
 """
 
 from __future__ import annotations
@@ -74,9 +62,7 @@ _jitter = random.random
 _now_ms = lambda: int(time.time() * 1000)  # noqa: E731
 
 
-# --- RemoveSnapshotsUpdate handler (missing in PyIceberg 0.8.1) ------------------------------
-
-
+# PyIceberg 0.8.1 defines RemoveSnapshotsUpdate but registers no handler for it.
 def _remove_snapshots(update, base_metadata, context):
     remove = set(update.snapshot_ids)
     for name, ref in base_metadata.refs.items():
@@ -105,9 +91,6 @@ def install() -> None:
 
 
 install()
-
-
-# --- limits ----------------------------------------------------------------------------------
 
 
 def maintenance_limits() -> dict[str, int]:
@@ -141,9 +124,6 @@ def _deadline_checker(limits, deadline, what):
             raise IngestionError(f"{what} deadline exceeded")
 
     return end, check
-
-
-# --- reachability ----------------------------------------------------------------------------
 
 
 class _Reach:
@@ -209,9 +189,6 @@ def _delete_all(delete, paths) -> list[str]:
     return failed
 
 
-# --- snapshot retention ----------------------------------------------------------------------
-
-
 def _expiry_candidates(metadata, limits, now_ms):
     snapshots = sorted(metadata.snapshots, key=lambda s: (s.timestamp_ms, s.snapshot_id))
     protected = {ref.snapshot_id for ref in metadata.refs.values()}
@@ -226,9 +203,11 @@ def _expiry_candidates(metadata, limits, now_ms):
 
 
 def _plan_batch(snapshots, candidates, reach, budget, max_delete):
-    """Oldest-first prefix of ``candidates`` whose unreachable files fit the run's remaining
-    ``budget``. ``None`` when not even the oldest one fits the remaining budget (the next run
-    continues); a snapshot that alone exceeds the whole per-run cap is refused."""
+    """Oldest-first prefix of ``candidates`` whose unreachable files fit the remaining ``budget``.
+
+    ``None`` when not even the oldest fits (the next run continues); a snapshot that alone
+    exceeds the whole per-run cap is refused.
+    """
     size = len(candidates)
     while True:
         batch = candidates[:size]
@@ -252,10 +231,10 @@ def expire_snapshots(
 ) -> dict[str, Any]:
     """Expire old snapshots of ``table`` and delete the files only they reached.
 
-    Bounded per run: at most ``SILVER_MAINT_MAX_DELETE_FILES`` files are deleted and no new
-    batch is started when the remaining time looks too short. Leftover candidates are
-    reported (``complete: false``, ``pending``) and expired by the next run; this backlog is
-    not an error, the data is unaffected.
+    Expired = older than ``SILVER_SNAPSHOT_RETENTION_DAYS``, not among the newest
+    ``SILVER_SNAPSHOTS_TO_RETAIN``, not current, not referenced by a ref. Bounded per run by
+    ``SILVER_MAINT_MAX_DELETE_FILES``; leftover candidates are reported (``complete: false``,
+    ``pending``) and expired by the next run, the data is unaffected.
     """
     limits = limits or maintenance_limits()
     end, check_deadline = _deadline_checker(limits, deadline, "snapshot retention")
@@ -348,12 +327,8 @@ def expire_snapshots(
     }
 
 
-# --- orphan cleanup --------------------------------------------------------------------------
-
-
 def _norm(uri: str) -> str:
-    """Comparable form of a file location: ``bucket/key`` for S3, the path for local files
-    (what ``pyarrow.fs`` listing returns)."""
+    """Comparable form of a location: ``bucket/key`` for S3, the path for local files (as pyarrow.fs lists them)."""
     parsed = urlparse(uri)
     if parsed.scheme in {"s3", "s3a", "s3n", "gs"}:
         return f"{parsed.netloc}{parsed.path}"

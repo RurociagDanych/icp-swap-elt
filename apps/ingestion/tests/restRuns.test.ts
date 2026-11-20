@@ -43,7 +43,7 @@ test('runBackfill pages newest->oldest and stops below floor', async () => {
   // canisterMaxTxTime=100, overlap=0 => floor=100
   const pages: Record<number, RestTx[]> = {
     1: [tx('a', 300), tx('b', 250)],
-    2: [tx('c', 200), tx('d', 90)], // 90 < floor 100 -> stop after this page
+    2: [tx('c', 200), tx('d', 90)],
   };
   const deps: RestDeps = {
     now: () => 1000,
@@ -54,17 +54,17 @@ test('runBackfill pages newest->oldest and stops below floor', async () => {
   const { target, sinks, getSaved } = fakeTarget();
   await runBackfill(cfg, target, logger, state, deps);
 
-  assert.equal(sinks[0].rows.length, 4);             // all 4 rows emitted
-  assert.equal(sinks[0].columns[0], 'tx_hash');      // REST headers used
+  assert.equal(sinks[0].rows.length, 4);
+  assert.equal(sinks[0].columns[0], 'tx_hash');
   assert.equal(getSaved()?.rest?.backfillComplete, true);
-  assert.equal(getSaved()?.rest?.incrementalWatermark, 300); // seeded to newest captured txTime
-  assert.equal(sinks.length, 1); // 2 pages fit in one file at pagesPerFile=50
+  assert.equal(getSaved()?.rest?.incrementalWatermark, 300);
+  assert.equal(sinks.length, 1);
 });
 
 test('runBackfill rotates files and advances the cursor only after each commit', async () => {
   const pages: Record<number, RestTx[]> = {
     1: [tx('a', 300), tx('b', 250)],
-    2: [tx('c', 200), tx('d', 90)], // 90 < floor 100 -> stop after this page
+    2: [tx('c', 200), tx('d', 90)],
   };
   const deps: RestDeps = {
     now: () => 1000,
@@ -75,18 +75,18 @@ test('runBackfill rotates files and advances the cursor only after each commit',
   const { target, sinks, getSaved } = fakeTarget();
   await runBackfill({ ...cfg, backfillPagesPerFile: 1 }, target, logger, state, deps);
 
-  assert.equal(sinks.length, 2);            // one file per page
+  assert.equal(sinks.length, 2);
   assert.equal(sinks[0].rows.length, 2);
   assert.equal(sinks[1].rows.length, 2);
-  assert.equal(sinks[0].closed, true);      // each file committed
+  assert.equal(sinks[0].closed, true);
   assert.equal(getSaved()?.rest?.backfillComplete, true);
-  assert.equal(getSaved()?.rest?.backfillCursor?.nextPage, 3); // cursor past both committed pages
+  assert.equal(getSaved()?.rest?.backfillCursor?.nextPage, 3);
 });
 
 test('runIncrementalRest emits only rows past the watermark and dedups', async () => {
   const pages: Record<number, RestTx[]> = {
     1: [tx('z', 500), tx('y', 400)],
-    2: [tx('x', 300), tx('w', 50)], // 50 <= watermark(200)-0 -> stop
+    2: [tx('x', 300), tx('w', 50)],
   };
   const deps: RestDeps = {
     now: () => 1000,
@@ -97,7 +97,6 @@ test('runIncrementalRest emits only rows past the watermark and dedups', async (
   const { target, sinks, getSaved } = fakeTarget();
   await runIncrementalRest({ ...cfg, mode: 'incremental' }, target, logger, state, deps);
 
-  // x is filtered (known hash); w is emitted as a new hash on the fetched page.
   assert.deepEqual(sinks[0].rows.map((r) => r.tx_hash), ['z', 'y', 'w']);
   assert.equal(getSaved()?.rest?.incrementalWatermark, 500);
 });
@@ -144,7 +143,7 @@ test('M2: pending incremental is recorded before the file commits and cleared af
   assert.deepEqual(history[0].rest?.pendingIncremental, {
     runId: 'r1', fileName: 'transactions_incremental_r1.csv', hashes: ['n1', 'n2'], maxSeen: 300,
   });
-  assert.equal(history[0].rest?.incrementalWatermark, 100); // cursor not advanced yet
+  assert.equal(history[0].rest?.incrementalWatermark, 100);
   assert.equal(history[1].rest?.pendingIncremental, undefined);
   assert.equal(history[1].rest?.incrementalWatermark, 300);
 });
@@ -157,7 +156,7 @@ test('M2: crash after file commit but before saveState does not duplicate rows o
     () => runIncrementalRest({ ...cfg, mode: 'incremental' }, crash.target, logger, state, okFetch({ 1: [tx('n1', 300), tx('n2', 200)] })),
     /commit failed/
   );
-  const persisted = crash.getSaved()!; // what a restarted process would load
+  const persisted = crash.getSaved()!;
   const reload = (): IngestionState => JSON.parse(JSON.stringify(persisted));
 
   // The file did commit (e.g. the crash hit between commit and saveState): resume dedupes it.

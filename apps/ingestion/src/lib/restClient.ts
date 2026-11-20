@@ -26,9 +26,9 @@ export type FetchLike = (
 export const DEFAULT_REST_TIMEOUT_MS = 30_000;
 
 export type FetchOptions = RetryOptions & {
-  // Per-attempt timeout (env REST_TIMEOUT_MS, default 30s).
+  /** Per-attempt timeout (env REST_TIMEOUT_MS, default 30s). */
   timeoutMs?: number;
-  // Total attempts (env RETRY_ATTEMPTS, default 5).
+  /** Total attempts (env RETRY_ATTEMPTS, default 5). */
   attempts?: number;
 };
 

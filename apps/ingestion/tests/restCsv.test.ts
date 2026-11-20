@@ -21,6 +21,6 @@ test('rowFromRestTx maps every header column', () => {
   for (const h of restHeaders) assert.ok(h in row, `missing column ${h}`);
   assert.equal(row.tx_hash, 'ttnzy-lyaaa-aaaag-qj2bq-cai244431');
   assert.equal(row.tx_time, 1782127219000);
-  assert.equal(row.from_alias, ''); // null -> empty string
+  assert.equal(row.from_alias, '');
   assert.equal(row.action_type, 'Swap');
 });

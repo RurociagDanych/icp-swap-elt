@@ -1,6 +1,3 @@
-# Offline checks (mock provider, no credentials) for concurrency limits, the
-# manifest-based load state machine, logging, ECR and input validation.
-
 mock_provider "aws" {
   mock_data "aws_partition" {
     defaults = {
@@ -78,8 +75,6 @@ variables {
   image_tag                = "test-1"
 }
 
-# --- H4: bounded parallelism ---------------------------------------------------------------
-
 run "reserved_concurrency_bounds_parallel_iceberg_commits" {
   command = plan
 
@@ -114,8 +109,6 @@ run "map_concurrency_above_reserved_function_concurrency_is_rejected" {
 
   expect_failures = [aws_lambda_function.silver_backfill]
 }
-
-# --- H5: ListKeys contract + Map failure policy ---------------------------------------------
 
 run "list_step_has_retry_timeout_and_returns_only_a_manifest_pointer" {
   command = apply
@@ -164,8 +157,6 @@ run "load_map_reads_keys_from_the_s3_manifest_and_tolerates_no_failures" {
     error_message = "ListKeys leads through the empty-list choice into the Map, which continues to the maintenance step and then the quality check"
   }
 }
-
-# --- In-job table maintenance after the Map --------------------------------------------------
 
 run "compact_step_runs_after_the_map_and_before_the_quality_check" {
   command = apply
@@ -312,8 +303,6 @@ run "state_machine_role_may_read_only_the_manifest_prefix" {
 
 }
 
-# --- M8: state machine logging ----------------------------------------------------------------
-
 run "both_state_machines_log_errors_without_execution_data" {
   command = apply
 
@@ -337,8 +326,6 @@ run "both_state_machines_log_errors_without_execution_data" {
     error_message = "log_destination must be the log group ARN with the :* suffix"
   }
 }
-
-# --- H6: ECR + image reference ------------------------------------------------------------------
 
 run "ecr_repository_is_immutable_and_deletable_and_lambdas_use_a_unique_tag" {
   command = apply
@@ -375,8 +362,6 @@ run "latest_tag_is_rejected_for_the_managed_repository" {
   expect_failures = [var.image_tag]
 }
 
-# --- L4 -----------------------------------------------------------------------------------------
-
 run "unsafe_target_generation_is_rejected" {
   command = plan
 
@@ -386,8 +371,6 @@ run "unsafe_target_generation_is_rejected" {
 
   expect_failures = [var.silver_target_generation]
 }
-
-# --- M6 -----------------------------------------------------------------------------------------
 
 run "environment_tag_follows_the_environment_variable" {
   command = plan

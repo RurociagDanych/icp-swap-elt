@@ -9,7 +9,7 @@ import { withRetry, type WarnFn } from './retry.js';
 import { pushBounded, type CanisterState, type IngestionState } from './state.js';
 import { buildManifest, type ManifestEntry, type StorageTarget } from './storageTarget.js';
 
-// The slice of the canister actor the archive load needs (injectable for tests).
+/** The slice of the canister actor the archive load needs (injectable for tests). */
 export type StorageReader = Pick<PoolInfoActor, 'getBaseRecord'>;
 
 export async function fetchCanisterFull(
@@ -50,7 +50,7 @@ export async function fetchCanisterFull(
       warn
     );
     const txs = page.content || [];
-    if (!txs.length) break; // handled below: stopping short of `total` is an error
+    if (!txs.length) break;
 
     const rows = txs.map((tx: SwapTx) => rowFromTx(storageId, tx));
     await sink.append(rows, headerPending);
@@ -137,7 +137,7 @@ export async function runFull(
   state.mode = 'full';
   state.latestStorageId = newestStorageId;
   state.lastRunAt = new Date().toISOString();
-  // Record the canister↔REST seam in epoch ms (canister timestamps are seconds; the REST
+  // Record the canister/REST seam in epoch ms (canister timestamps are seconds; the REST
   // feed is ms) and mark the one-time archive complete so future runs use only backfill +
   // REST incremental. The seam comes from EVERY canister's persisted maxTimestampSec, not
   // just those processed in this run (a local resume skips completed ones). If any canister
@@ -161,4 +161,3 @@ export async function runFull(
 
   logger.info('full load done', { rows: totalRows, files: manifestEntries.length, newestStorageId, canisterMaxTxTime: state.canisterMaxTxTime });
 }
-

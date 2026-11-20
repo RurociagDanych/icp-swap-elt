@@ -5,13 +5,17 @@ import type { Logger } from './logger.js';
 import type { WarnFn } from './retry.js';
 import type { StorageTarget } from './storageTarget.js';
 
-// The event is the only trigger of the transformation stage, so it gets more attempts than
-// ordinary calls (about 80s of backoff in total with the default delays).
+/**
+ * The event is the only trigger of the transformation stage, so it gets more attempts than
+ * ordinary calls (about 80s of backoff in total with the default delays).
+ */
 export const ANNOUNCE_RETRIES = 8;
 
-// Tells the transformation stage which S3 prefixes this run wrote files under, so it loads
-// exactly that data. Also sent after a failed run: files committed before the failure are
-// complete and the resume cursor has already moved past them.
+/**
+ * Tells the transformation stage which S3 prefixes this run wrote files under, so it loads
+ * exactly that data. Also sent after a failed run: files committed before the failure are
+ * complete and the resume cursor has already moved past them.
+ */
 export async function announceRun(
   cfg: Config,
   target: StorageTarget,

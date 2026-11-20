@@ -1,5 +1,3 @@
-# Offline checks (mock provider, no credentials) for the raw bucket's controls.
-
 mock_provider "aws" {
   mock_data "aws_caller_identity" {
     defaults = {

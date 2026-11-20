@@ -72,10 +72,9 @@ export async function runBackfill(cfg: Config, target: StorageTarget, logger: Lo
     }
 
     if (sink) {
-      const stats = await sink.close(); // commits this file to S3
+      const stats = await sink.close();
       manifestEntries.push({ storageId: `rest-backfill-p${startPage}`, total, written: fileRows, sink: stats } as ManifestEntry);
       totalWritten += fileRows;
-      // Only now is the batch durable — advance the cursor past it.
       rest.backfillCursor = { endSnapshot, nextPage: page };
       rest.backfillFloor = floor;
       state.rest = rest;
@@ -104,16 +103,18 @@ export async function runBackfill(cfg: Config, target: StorageTarget, logger: Lo
   });
 }
 
-// Crash window: the incremental file is committed (sink.close) BEFORE the watermark/hash
-// state is saved, and the two cannot be made one atomic step on S3. To keep a crash in that
-// window from duplicating rows, the run first persists `pendingIncremental` (runId, file
-// name, the hashes it emitted, the newest txTime) and only clears it together with the
-// watermark advance. A later run that finds a pending record checks whether that file was
-// actually committed: if yes, it folds the hashes/watermark in (rows are not re-emitted);
-// if no, it discards the record and re-fetches normally. Remaining at-least-once cases
-// (e.g. more than RECENT_HASHES_LIMIT rows in one run, a crash after saveState but before the
-// manifest, backfill batches re-run under a new runId) are absorbed by the Silver stage,
-// which de-duplicates on tx_hash.
+/**
+ * Crash window: the incremental file is committed (sink.close) BEFORE the watermark/hash
+ * state is saved, and the two cannot be made one atomic step on S3. To keep a crash in that
+ * window from duplicating rows, the run first persists `pendingIncremental` (runId, file
+ * name, the hashes it emitted, the newest txTime) and only clears it together with the
+ * watermark advance. A later run that finds a pending record checks whether that file was
+ * actually committed: if yes, it folds the hashes/watermark in (rows are not re-emitted);
+ * if no, it discards the record and re-fetches normally. Remaining at-least-once cases
+ * (e.g. more than RECENT_HASHES_LIMIT rows in one run, a crash after saveState but before the
+ * manifest, backfill batches re-run under a new runId) are absorbed by the Silver stage,
+ * which de-duplicates on tx_hash.
+ */
 async function resolvePendingIncremental(
   target: StorageTarget, logger: Logger, state: IngestionState, rest: RestState,
 ): Promise<void> {

@@ -1,26 +1,5 @@
-"""Lambda handler for the data-quality checks (dbt tests on DuckDB over the Silver tables).
+"""Lambda handler for the data-quality checks (dbt tests on DuckDB over the Silver tables)."""
 
-The read path is PyIceberg -> Arrow -> DuckDB: PyIceberg is what the transformation already uses
-to write and read these tables (it applies delete files and the yearly partition spec), and it
-streams record batches, so the fact table never has to fit in memory as Python objects. Only the
-columns the checks need are loaded. The tables land in a DuckDB file under /tmp as
-``main.icp_swap_events`` and ``main.token_dim``; ``dbt test`` then runs the project in ``quality_dbt/``
-(declared tests in ``models/sources.yml`` and SQL tests in ``tests/``).
-
-The scan is bounded from the manifest metadata before any data file is opened (file, row and
-byte caps) and by ONE deadline covering BOTH the load and the ``dbt test`` phase (the earlier of
-``QUALITY_CHECK_DEADLINE_SECONDS`` after the start and the Lambda's remaining time minus
-``QUALITY_CHECK_DEADLINE_MARGIN_SECONDS``). dbt runs in a child process that is killed when the
-remaining budget is spent, so the Lambda reports a clear ``QualityCheckError`` instead of being
-cut off by its hard timeout. Everything fails closed like the other read paths in this package.
-A run with failing (``error``/``fail``) tests raises ``QualityCheckFailed`` so Lambda reports an
-error (alarm, SNS); ``warn`` severity tests are reported but do not fail the run.
-
-Scale limit: every run reloads the WHOLE fact table (the selected columns) into DuckDB; the
-row/byte caps (default 30,000,000 rows / 8 GiB) are the documented ceiling of this design.
-Beyond them the run fails with a message naming the measured size; the follow-up is windowed
-checks (see README "Data quality").
-"""
 from __future__ import annotations
 
 import contextlib
@@ -69,6 +48,9 @@ FACT_COLUMNS = (
 )
 DIM_COLUMNS = ("ledger_id", "symbol", "name", "standard", "decimals", "as_of")
 
+# Scale limit: every run reloads the WHOLE fact table (selected columns) into DuckDB; the
+# row/byte caps are the documented ceiling of this design. Beyond them the run fails naming the
+# measured size; the follow-up is windowed checks (see README "Data quality").
 #: Fail-closed bounds (overridable with the QUALITY_CHECK_* environment variables).
 DEFAULT_LIMITS = {
     "max_files": 20_000,
@@ -90,10 +72,12 @@ _LIMIT_ENV = {
 
 class QualityCheckError(RuntimeError):
     """Fail-closed bound on the read-only scan, or dbt itself could not run."""
+    pass
 
 
 class QualityCheckFailed(RuntimeError):
     """At least one test with error severity failed; the report is in ``args[1]``."""
+    pass
 
 
 def _limit(name: str, key: str) -> int:
@@ -113,13 +97,11 @@ def _catalog():
 
 
 def _exec(con, sql: str):
-    """Run a statement and drain its result (DuckDB refuses new work on a connection that
-    still holds an unfinished result)."""
+    """Run a statement and drain its result (DuckDB refuses new work while one is unfinished)."""
     return con.execute(sql).fetchall()
 
 
 def _load_table(catalog, identifier: str, columns: tuple[str, ...], con, target: str, deadline: float):
-    """Stream one Iceberg table into DuckDB; returns its scan statistics (None if missing)."""
     try:
         table = catalog.load_table(identifier)
     except NoSuchTableError:
@@ -168,8 +150,7 @@ def _load_table(catalog, identifier: str, columns: tuple[str, ...], con, target:
 
 
 def _prepare_environment(workdir: Path) -> Path:
-    """Copy the dbt project next to a writable work dir (the Lambda filesystem is read-only
-    except /tmp) and point everything dbt writes there."""
+    """Copy the dbt project to a writable work dir (Lambda is read-only except /tmp)."""
     project = workdir / "project"
     shutil.copytree(DBT_PROJECT_DIR, project)
     os.environ["HOME"] = str(workdir)  # dbt writes under ~/.dbt; only /tmp is writable in Lambda
@@ -182,10 +163,12 @@ def _prepare_environment(workdir: Path) -> Path:
 
 @contextlib.contextmanager
 def _thread_locks_instead_of_semaphores():
-    """dbt's adapters take ``multiprocessing`` locks, which are POSIX semaphores and need
-    /dev/shm; Lambda has none (``FileNotFoundError`` at adapter start-up). dbt runs here in one
-    process on a thread pool, so plain thread locks are equivalent. Patched only around the dbt
-    run."""
+    """Swap ``multiprocessing`` locks for thread locks around the dbt run.
+
+    dbt's adapters take POSIX-semaphore locks that need /dev/shm, which Lambda lacks
+    (``FileNotFoundError`` at adapter start-up). dbt runs in one process on a thread pool, so
+    thread locks are equivalent.
+    """
     import multiprocessing.synchronize as synchronize
 
     # BaseContext.Lock/RLock import these classes at call time, so this also covers the
@@ -206,7 +189,6 @@ _DBT_CHILD = (
 
 
 def _dbt_child(project: str, workdir: str, out: str) -> None:
-    """Entry point of the isolated dbt process: run the tests, write the checks as JSON."""
     checks = run_dbt_tests(Path(project), Path(workdir))
     Path(out).write_text(json.dumps(checks, default=str))
 
@@ -214,9 +196,8 @@ def _dbt_child(project: str, workdir: str, out: str) -> None:
 def _run_dbt_isolated(project: Path, workdir: Path, budget: float) -> list[dict[str, Any]]:
     """Run ``dbt test`` in a child process bounded by ``budget`` seconds.
 
-    dbt runs in-process threads that cannot be interrupted; a child process can be killed,
-    so a slow dbt phase ends with a clear error before the Lambda hard timeout (which would
-    otherwise surface only as a generic ``Sandbox.Timedout``).
+    dbt's threads cannot be interrupted but a child process can be killed, so a slow dbt phase
+    ends with a clear error instead of a generic ``Sandbox.Timedout`` at the Lambda hard timeout.
     """
     out = workdir / "checks.json"
     try:
@@ -278,9 +259,10 @@ def run_quality_checks(
 ) -> dict[str, Any]:
     """Load the Silver tables into DuckDB, run the dbt tests and return the report.
 
-    ``deadline`` (absolute ``time.monotonic()``) bounds the WHOLE run together with
-    ``QUALITY_CHECK_DEADLINE_SECONDS``. ``isolate_dbt=False`` runs dbt in-process (no time
-    bound on that phase; tests only).
+    Failing (error/fail) tests raise ``QualityCheckFailed`` so Lambda reports an error (alarm,
+    SNS); ``warn`` severity tests are reported but do not fail the run. ``deadline`` (absolute
+    ``time.monotonic()``) bounds the WHOLE run together with ``QUALITY_CHECK_DEADLINE_SECONDS``.
+    ``isolate_dbt=False`` runs dbt in-process with no time bound on that phase (tests only).
     """
     import duckdb
 

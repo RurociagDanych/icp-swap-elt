@@ -1,12 +1,9 @@
 """In-job compaction of the Silver fact table (``fact_compaction``).
 
-The backfill load writes one Parquet file per raw object. The event_id lookup selects every
-file whose event-time statistics overlap the incoming object, so the selected-file count grows
-with every object until ``SILVER_MAX_SELECTED_FILES`` fails the load. ``compact_table`` rewrites
-the small files of each year partition into fewer, time-sorted files, in snapshot-fenced
-transactions, without changing a single row.
-
-Offline: SQLite-backed Iceberg catalog, ``file://`` warehouse, no AWS calls.
+The backfill load writes one Parquet file per raw object and the event_id lookup selects every
+file overlapping the incoming object, so the selected-file count grows until
+``SILVER_MAX_SELECTED_FILES`` fails the load. Offline: SQLite-backed Iceberg catalog, ``file://``
+warehouse, no AWS calls.
 """
 
 from __future__ import annotations
@@ -168,9 +165,7 @@ class RowSetPreservationTests(CompactionBase):
         self.ingest("obj-conflict.csv", [b_row("h-1-3", loser_ts, "2")])
         self.compact()
         compacted = sorted_rows(self.table())
-        # exact replay of an object that is now inside the compacted file: a no-op
         self.assertTrue(self.ingest("obj-1-again.csv", wide_object(1))["replayed"])
-        # both conflicting payloads again: the stored conflict survivor stays, nothing is written
         again = self.ingest("obj-conflict-again.csv", [b_row("h-1-3", loser_ts, "2")])
         self.assertEqual(0, again["rows_written"])
         again = self.ingest("obj-original-again.csv", [b_row("h-1-3", loser_ts, "1")])
@@ -213,7 +208,6 @@ class LookupBoundTests(CompactionBase):
             self.ingest("obj-9.csv", wide_object(9))
         summary = self.compact()
         self.assertEqual(9, summary["files_before"])
-        # 270 rows sorted by event time into files of at most 60 rows
         self.assertEqual(5, summary["files_after"])
         result = self.ingest("obj-9.csv", wide_object(9))
         self.assertEqual(30, result["rows_written"])
@@ -223,7 +217,6 @@ class LookupBoundTests(CompactionBase):
         for n in range(8):
             self.ingest(f"obj-{n}.csv", wide_object(n))
         self.compact()
-        # one day well inside the first compacted file's event-time range
         narrow = [b_row(f"n-{m}", BASE_MS + 3 * DAY_MS + (30 + m) * MINUTE_MS) for m in range(5)]
         result = self.ingest("narrow.csv", narrow)
         self.assertEqual(5, result["rows_written"])
@@ -235,8 +228,7 @@ def compaction_snapshots(table):
 
 
 class PerObjectTriggerTests(CompactionBase):
-    """Optional threshold check inside ``ingest_one``: compacts only when the lookup of THIS
-    object would select more than ``SILVER_COMPACT_TRIGGER_SELECTED_FILES`` files."""
+    """Optional threshold check inside ``ingest_one``: compacts only when THIS object's lookup would select more than ``SILVER_COMPACT_TRIGGER_SELECTED_FILES`` files."""
 
     ENV = {
         "SILVER_MAX_SELECTED_FILES": "8",
@@ -255,7 +247,6 @@ class PerObjectTriggerTests(CompactionBase):
         triggered = [r for r in results if "compaction" in r]
         rewrites = [r for r in triggered if r["compaction"]["commits"]]
         self.assertGreaterEqual(len(rewrites), 1)
-        # cheap check, rare rewrite: far fewer compactions than objects
         self.assertLessEqual(len(rewrites), 4)
         self.assertEqual(
             len(compaction_snapshots(self.table())), sum(r["compaction"]["commits"] for r in triggered)
@@ -282,8 +273,7 @@ class PerObjectTriggerTests(CompactionBase):
 
 
 class PartitionThresholdTests(CompactionBase):
-    """``SILVER_COMPACT_PARTITION_FILE_THRESHOLD`` keeps the daily run cheap: a partition with
-    at most that many files is neither read nor rewritten."""
+    """``SILVER_COMPACT_PARTITION_FILE_THRESHOLD`` keeps the daily run cheap: a partition with at most that many files is neither read nor rewritten."""
 
     ENV = {"SILVER_COMPACT_PARTITION_FILE_THRESHOLD": "5"}
 
@@ -377,7 +367,6 @@ class SlicingTests(CompactionBase):
         self.assertGreaterEqual(summary["commits"], 3)
         self.assertEqual(1, summary["partitions_compacted"])
         self.assertTrue(before.equals(sorted_rows(self.table())))
-        # every compaction commit replaced at most SILVER_COMPACT_MAX_INPUT_FILES files
         table = self.table()
         compaction_snapshots = [
             s for s in table.metadata.snapshots if s.summary.get("icp-swap.compaction") == "true"
@@ -388,7 +377,7 @@ class SlicingTests(CompactionBase):
             # incremental totals (PyIceberg 0.8.1 would summarize an OVERWRITE as a truncate)
             self.assertEqual("300", snap.summary["total-records"])
             self.assertEqual(snap.summary["added-records"], snap.summary["deleted-records"])
-        self.assertLess(summary["files_after"], 2)  # < SILVER_COMPACT_MIN_INPUT_FILES small files
+        self.assertLess(summary["files_after"], 2)
 
     def test_deadline_between_slices_reports_incomplete_after_committing_progress(self):
         import fact_compaction
@@ -403,7 +392,7 @@ class SlicingTests(CompactionBase):
 
         def commit(tx):
             result = real_commit(tx)
-            clock["offset"] += 600.0  # the slice "took" 600 s
+            clock["offset"] += 600.0
             return result
 
         with patch.object(fact_compaction, "_monotonic", lambda: real_monotonic() + clock["offset"]), patch.object(
@@ -412,7 +401,6 @@ class SlicingTests(CompactionBase):
             with self.assertRaises(MaintenanceIncomplete) as raised:
                 self.compact(deadline=real_monotonic() + 1000)
         self.assertIn("re-run", str(raised.exception))
-        # the first slice is committed and correct; the rest is left for the next run
         self.assertTrue(before.equals(sorted_rows(self.table())))
         summary = self.compact()
         self.assertTrue(summary["complete"])
@@ -446,8 +434,7 @@ class CommitDisciplineTests(CompactionBase):
         self.assertEqual(on_disk | self.data_files_paths(), self.parquet_on_disk())
 
     def test_a_real_concurrent_writer_makes_compaction_replan_and_lose_nothing(self):
-        """Daily and backfill executions can overlap: the snapshot fence must reject the
-        compaction commit that was planned before another writer's commit."""
+        """Daily and backfill executions can overlap: the snapshot fence must reject a compaction commit planned before another writer's commit."""
         for n in range(4):
             self.ingest(f"obj-{n}.csv", wide_object(n))
         real_commit = Transaction.commit_transaction

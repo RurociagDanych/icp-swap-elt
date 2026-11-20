@@ -1,20 +1,9 @@
 """Lambda handler for the icp_swap_events Silver transformation (registered-mode only).
 
-Every write path routes through ``silver_persistence`` (the flat
-``silver-flat-v1`` contract: ``event_id`` dedup against the Iceberg fact table, fail-closed
-bounded ingestion, quarantine-on-dirty-row) and ``token_dimension`` (current-label
-metadata merge: latest-observed symbol/name win, decimals/standard fill-only). The same image
-backs two Lambdas: ``silver`` (2048 MB; ``list``,
-``incremental``, ``token_metadata``) and ``silver_backfill`` (10240 MB; only
-``backfill_file`` from the backfill state machine); the data-quality checks run in their own
-Lambda (``quality_job``). Modes: ``list`` (enumerate raw CSV keys under given
-prefixes inside ``RAW_PREFIX``; writes them as a JSON-array manifest to the processed bucket and
-returns ``{manifest_bucket, manifest_key, count}``), ``backfill_file`` (ingest one explicit S3 key — used by the
-one-time historical reload), ``incremental`` (ingest one day's worth of
-non-backfill objects under the configured raw prefix), ``token_metadata``
-(bounded read-only lookup for a list of ledger IDs), ``compact`` (post-load table maintenance:
-compaction, snapshot retention, token_dim orphan cleanup; last step before the quality check in
-both state machines).
+Modes: ``list``, ``backfill_file``, ``incremental``, ``token_metadata`` and ``compact``. The same
+image backs two Lambdas: ``silver`` (2048 MB; list, incremental, token_metadata) and
+``silver_backfill`` (10240 MB; only backfill_file from the backfill state machine). Data-quality
+checks run in their own Lambda (``quality_job``).
 """
 
 from __future__ import annotations
@@ -46,12 +35,10 @@ REGION = os.environ.get("AWS_REGION_NAME", os.environ.get("AWS_REGION", "us-east
 
 _s3 = boto3.client("s3")
 
-# One-time Dataset A / Dataset B seam reconciliation (see seam_reconciliation.py for
-# the full rationale). Deliberately scoped to the exact pair of raw objects that overlap
-# — this is a one-time historical-reload fixup, not a general ongoing mechanism, so the
-# keys and window are fixed constants rather than derived at runtime. Never applies to
-# any other key. The two keys are fixed relative to RAW_PREFIX, so a deployment whose
-# historical data lives under a different raw prefix (set via ``raw_prefix``) matches the
+# One-time Dataset A / Dataset B seam reconciliation (see seam_reconciliation.py). Scoped to
+# the exact pair of raw objects that overlap: a one-time historical-reload fixup, so the keys and
+# window are fixed constants, never derived at runtime, and never apply to any other key. The
+# keys are fixed relative to RAW_PREFIX, so a deployment with another ``raw_prefix`` matches the
 # same objects.
 SEAM_B_KEY = RAW_PREFIX + (
     "rest/incremental/2026-06-23T11-49-42-924Z/"
@@ -65,8 +52,8 @@ SEAM_WINDOW_END = datetime(2026, 6, 7, 6, 37, 26, tzinfo=UTC)
 #: Seconds kept free before the Lambda hard timeout: the publication deadline handed to
 #: ingest_one is at most ``remaining_time - margin`` so a commit is never cut off mid-way.
 DEFAULT_DEADLINE_MARGIN_SECONDS = 15
-#: List-mode manifest objects (M8): written to the processed bucket under this prefix; the
-#: state machine reads the key list from S3 instead of from the 256 KiB-capped state output.
+#: List-mode manifest objects live under this prefix; the state machine reads the key list from
+#: S3 instead of from the 256 KiB-capped state output.
 LIST_MANIFEST_PREFIX = "silver-manifests/list/"
 #: Structured log markers that an operator alarm must match (metric filter on ``marker``).
 MARKER_EMPTY_SOURCE = "SILVER_EMPTY_SOURCE"
@@ -88,9 +75,8 @@ def _positive_int_env(name: str, default: int) -> int:
 def _invocation_deadline(context: Any, started: float) -> float:
     """ONE absolute ``time.monotonic()`` deadline for the whole invocation.
 
-    The earlier of ``SILVER_DEADLINE_SECONDS`` after the invocation started and the Lambda's
-    remaining time minus ``SILVER_DEADLINE_MARGIN_SECONDS``. Every key of an incremental run
-    and every phase of ``_process_key`` share it (no per-key fresh budget).
+    The earlier of ``SILVER_DEADLINE_SECONDS`` after the start and the Lambda's remaining time
+    minus ``SILVER_DEADLINE_MARGIN_SECONDS``. Every key and phase shares it (no per-key budget).
     """
     soft = _positive_int_env("SILVER_DEADLINE_SECONDS", 45)
     deadline = started + soft
@@ -104,8 +90,7 @@ def _invocation_deadline(context: Any, started: float) -> float:
 
 
 def _validated_prefixes(prefixes: Any) -> list[str]:
-    """Every listed prefix must be a nonblank string inside the configured RAW_PREFIX: an
-    empty prefix would list (and then load) the whole raw bucket."""
+    """Every prefix must be a nonblank string inside RAW_PREFIX: an empty one would load the whole bucket."""
     if not isinstance(prefixes, list):
         raise ValueError("prefixes must be a list of strings")
     checked = []
@@ -119,8 +104,7 @@ def _validated_prefixes(prefixes: Any) -> list[str]:
 
 
 def _write_list_manifest(keys: list[str]) -> dict[str, Any]:
-    """Persist the key list as a JSON array (content-addressed, so a retried list writes the
-    same object) and return the small pointer the state machine consumes."""
+    """Persist the key list as a content-addressed JSON array (a retried list writes the same object)."""
     body = json.dumps(keys, separators=(",", ":")).encode("utf-8")
     key = f"{LIST_MANIFEST_PREFIX}{hashlib.sha256(body).hexdigest()}.json"
     _s3.put_object(
@@ -143,8 +127,8 @@ def _list_csv_keys(prefixes: Iterable[str]) -> list[str]:
 def _process_key(key: str, deadline: float | None = None) -> dict[str, Any]:
     """Load one raw object: facts first (``ingest_one``), then the best-effort token_dim.
 
-    ``deadline`` is the invocation's absolute monotonic deadline (``_invocation_deadline``);
-    ``None`` (direct callers/tests) means ``SILVER_DEADLINE_SECONDS`` from now.
+    ``deadline`` is the invocation's absolute monotonic deadline; ``None`` (direct callers and
+    tests) means ``SILVER_DEADLINE_SECONDS`` from now.
     """
     if deadline is None:
         deadline = time.monotonic() + _positive_int_env("SILVER_DEADLINE_SECONDS", 45)
@@ -188,9 +172,8 @@ def _process_key(key: str, deadline: float | None = None) -> dict[str, Any]:
         body, seam_report = seam_reconciliation.clean_dataset_b_overlap(
             body, a_index, SEAM_WINDOW_START, SEAM_WINDOW_END, max_records=max_rows
         )
-        # The cleaned bytes no longer match the B object's own VersionId/ETag — fall
-        # through to the sha256-of-content fallback below instead of mislabeling the
-        # reconciled content with the original (now-wrong) source version.
+        # The cleaned bytes no longer match the B object's own VersionId/ETag: fall through to
+        # the sha256-of-content fallback below instead of mislabeling the reconciled content.
         version = ""
         log_event(LOG, logging.INFO, "seam reconciliation applied", key=key, **seam_report)
     # Facts FIRST: they never depend on token_dim (README), so a dimension problem must not
@@ -238,11 +221,10 @@ def _process_key(key: str, deadline: float | None = None) -> dict[str, Any]:
 def _apply_token_dim(catalog, key, body, version, max_rows, max_bytes, deadline):
     """Best-effort token_dim merge for one object (runs AFTER the facts committed).
 
-    A ``MetadataError`` (contract/bounds violation, schema refusal, retry or deadline
-    exhaustion) is reported in the result and logged as a WARNING with
-    ``marker=TOKEN_DIM_UPDATE_FAILED``; it never fails the invocation, because the facts are
-    already published. Recovery: fix the cause and replay the object (``backfill_file``):
-    the fact load is an exact-replay no-op and the dimension merge is idempotent.
+    A ``MetadataError`` is reported in the result and logged as a WARNING with
+    ``marker=TOKEN_DIM_UPDATE_FAILED``; it never fails the invocation because the facts are
+    already published. Recovery: fix the cause and replay the object (``backfill_file``): the
+    fact load is an exact-replay no-op and the dimension merge is idempotent.
     """
     from token_dimension import (
         DEFAULT_LIMITS,
@@ -315,12 +297,10 @@ _RESPONSE_MAX_CONFLICTS = 3
 def _backfill_response(result: dict[str, Any]) -> dict[str, Any]:
     """Slim ``_process_key`` result for the Step Functions caller.
 
-    Step Functions caps a state's output at 256 KiB and a backfill run collects one response
-    per object, so the per-ledger ``token_dim`` lists (readback, changed/created ledgers,
-    missing attributes, the full conflict list) are replaced by counts and the first few
-    conflicts. Everything the reload verification reads (rows_written, replayed, lookup,
-    verify, seam report, conflicts_resolved) is kept as is; the complete result is still in
-    the structured ``object complete`` log line written by ``_process_key``.
+    A state's output is capped at 256 KiB and a backfill run collects one response per object,
+    so the per-ledger ``token_dim`` lists are replaced by counts and the first few conflicts.
+    Everything the reload verification reads is kept; the complete result is still in the
+    ``object complete`` log line written by ``_process_key``.
     """
     slim = {k: v for k, v in result.items() if k != "token_dim"}
     dim = result.get("token_dim")
@@ -350,12 +330,11 @@ def _backfill_response(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def _maintain(deadline: float) -> dict[str, Any]:
-    """``compact`` mode: fact-table compaction, then snapshot retention (both tables), then
-    orphan-file cleanup (``token_dim`` only), in that order, under ONE invocation deadline.
+    """``compact`` mode: fact compaction, then snapshot retention (both tables), then orphan cleanup (token_dim only).
 
-    Returns a slim summary (counts only; the Step Functions state output is capped at
-    256 KiB). ``MaintenanceIncomplete`` (bounded progress committed, work left) propagates so
-    the state machine's Retry re-runs the step; every other error fails closed.
+    Runs under ONE invocation deadline and returns a slim summary (the state output is capped at
+    256 KiB). ``MaintenanceIncomplete`` propagates so the state machine's Retry re-runs the step;
+    every other error fails closed.
     """
     import fact_compaction
 
@@ -386,8 +365,10 @@ def _maintain(deadline: float) -> dict[str, Any]:
 
 
 def _maintain_snapshots_and_orphans(catalog, fact_table, deadline: float) -> dict[str, Any]:
-    """Snapshot retention on both tables, then orphan cleanup on ``token_dim`` only (the fact
-    table's location holds unreferenced quarantine artifacts and is passed as protected)."""
+    """Snapshot retention on both tables, then orphan cleanup on ``token_dim`` only.
+
+    The fact table's location holds unreferenced quarantine artifacts, so it is passed as protected.
+    """
     import table_maintenance
 
     retention: dict[str, Any] = {}
@@ -412,10 +393,9 @@ def _maintain_snapshots_and_orphans(catalog, fact_table, deadline: float) -> dic
 
 def _process_incremental(target: date, deadline: float | None = None) -> dict[str, Any]:
     prefix = incremental_prefix(RAW_PREFIX, target.isoformat())
-    # Skip one-time bulk backfill files: the ingestion stage drops them into the same date folder as
-    # the daily incremental feed, and they are far too large for a single daily incremental
-    # invocation (they are loaded once by the backfill state machine on the dedicated,
-    # larger silver_backfill Lambda). See is_backfill_object().
+    # Skip one-time bulk backfill files: the ingestion stage drops them into the same date folder
+    # as the daily incremental feed, and they are far too large for a daily invocation (the
+    # backfill state machine loads them on the larger silver_backfill Lambda).
     keys = [k for k in _list_csv_keys([prefix]) if not is_backfill_object(k)]
     log_event(
         LOG, logging.INFO, "incremental run", date=target.isoformat(), files=len(keys)
@@ -439,8 +419,7 @@ def _process_incremental(target: date, deadline: float | None = None) -> dict[st
 
 
 def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
-    """Dispatch on ``event['mode']``: list | incremental | backfill_file | token_metadata |
-    compact."""
+    """Dispatch on ``event['mode']``: list | incremental | backfill_file | token_metadata | compact."""
     started = time.monotonic()
     mode = event.get("mode", "incremental")
     log_event(LOG, logging.INFO, "invoked", mode=mode)
@@ -467,10 +446,9 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
         except NoSuchTableError:
             table = None
         result = read_metadata(table, ledger_ids)
-        # Public-response bound, distinct from the internal bounded readback budget used
-        # above (physical parquet bytes read): bound the ENCODED response itself so a caller
-        # never receives a payload that can exceed the Lambda synchronous invoke response
-        # limit (6 MB), with margin. Oversize is rejected outright, never truncated.
+        # Public-response bound, distinct from the internal bounded readback budget: bound the
+        # ENCODED response so a caller never receives a payload that can exceed the Lambda
+        # synchronous invoke response limit (6 MB). Oversize is rejected, never truncated.
         max_response_bytes = int(
             os.environ.get("TOKEN_METADATA_MAX_RESPONSE_BYTES", str(4 * 1024 * 1024))
         )

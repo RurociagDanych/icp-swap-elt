@@ -1,6 +1,3 @@
-# Offline plan-level checks (mock provider, no credentials) for IAM scoping and the alerts
-# topic policy. Every run uses `command = plan`; no AWS API is called.
-
 mock_provider "aws" {
   mock_data "aws_partition" {
     defaults = {
@@ -69,7 +66,7 @@ mock_provider "aws" {
   }
 }
 
-# Distinct role ARNs so "which function runs under which role" is assertable.
+# # Distinct role ARNs so "which function runs under which role" is assertable.
 override_resource {
   target = aws_iam_role.quality
   values = {
@@ -87,16 +84,14 @@ override_resource {
 variables {
   aws_account_id  = "123456789012"
   raw_bucket_name = "raw-bucket"
-  # Pinned: terraform test also reads the local, gitignored terraform.tfvars, which sets raw_prefix to the
-  # migrated prefix; this test asserts the module default, so it must not depend on that file.
+  # # Pinned: terraform test also reads the local, gitignored terraform.tfvars, which sets raw_prefix
+  # # to the migrated prefix; this test asserts the module default, so it must not depend on that file.
   raw_prefix               = "icp-swap-elt"
   processed_bucket_name    = "processed-bucket"
   glue_database_name       = "icp_swap_elt"
   silver_target_generation = "g20261101"
   image_tag                = "test-1"
 }
-
-# --- B2: the alerts topic must accept CloudWatch alarm notifications ---------------------
 
 run "alerts_topic_policy_lets_cloudwatch_alarms_publish_with_source_conditions" {
   command = plan
@@ -131,8 +126,6 @@ run "alerts_topic_policy_lets_cloudwatch_alarms_publish_with_source_conditions" 
   }
 }
 
-# --- H2: quality is read-only and has its own role ---------------------------------------
-
 run "quality_runs_under_its_own_read_only_role" {
   command = apply
 
@@ -164,8 +157,6 @@ run "quality_runs_under_its_own_read_only_role" {
     error_message = "the quality role has no business reading the raw bucket"
   }
 }
-
-# --- H2/H3: writer role scoping -----------------------------------------------------------
 
 run "writer_role_writes_only_below_the_warehouse_prefix_and_lists_raw_by_prefix" {
   command = plan

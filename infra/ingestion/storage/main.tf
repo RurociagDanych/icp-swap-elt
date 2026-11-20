@@ -76,14 +76,13 @@ resource "aws_s3_bucket_public_access_block" "raw_data" {
 resource "aws_s3_bucket_ownership_controls" "raw_data" {
   bucket = aws_s3_bucket.raw_data.id
 
-  # ACLs disabled: the bucket owner owns every object and access is governed by policies only.
   rule {
     object_ownership = "BucketOwnerEnforced"
   }
 }
 
-# Optional server access logging, off by default. The target bucket must already exist and allow
-# log delivery (logging.s3.amazonaws.com); it is not managed here.
+# # Optional server access logging, off by default. The target bucket must already exist and allow
+# # log delivery (logging.s3.amazonaws.com); it is not managed here.
 resource "aws_s3_bucket_logging" "raw_data" {
   count         = var.access_log_bucket_name != "" ? 1 : 0
   bucket        = aws_s3_bucket.raw_data.id
@@ -116,10 +115,9 @@ data "aws_iam_policy_document" "raw_data_tls_only" {
   }
 }
 
-# Ingested data is append-only for everybody except an explicit admin. The ingestion task only
-# ever deletes its run lock (<prefix>/locks/run.lock); canister/ and rest/ hold the raw history.
-# Applies to DeleteObject and DeleteObjectVersion (s3:DeleteObject*). Lifecycle expiration of
-# noncurrent versions is performed by S3 itself and is not affected by bucket policies.
+# # Ingested data is append-only except for an explicit admin; the task only deletes its run lock.
+# # Covers DeleteObject and DeleteObjectVersion. Lifecycle expiration of noncurrent versions is done
+# # by S3 itself and is not affected by bucket policies.
 data "aws_iam_policy_document" "raw_data_protect" {
   source_policy_documents = [data.aws_iam_policy_document.raw_data_tls_only.json]
 
@@ -155,7 +153,7 @@ resource "aws_s3_bucket_policy" "raw_data" {
   bucket = aws_s3_bucket.raw_data.id
   policy = data.aws_iam_policy_document.raw_data_protect.json
 
-  # The public access block and the ownership controls are applied before the policy.
+  # # The public access block and the ownership controls are applied before the policy.
   depends_on = [
     aws_s3_bucket_public_access_block.raw_data,
     aws_s3_bucket_ownership_controls.raw_data,

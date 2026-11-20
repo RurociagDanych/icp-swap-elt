@@ -22,11 +22,15 @@ export type Manifest = {
   totals: { files: number; rows: number; bytes: number };
 };
 
-// A crashed run (e.g. SIGKILL mid-flight) leaves its lock behind; locks older
-// than this are considered stale and stolen. Must exceed the longest plausible run.
+/**
+ * A crashed run (e.g. SIGKILL mid-flight) leaves its lock behind; locks older
+ * than this are considered stale and stolen. Must exceed the longest plausible run.
+ */
 export const LOCK_TTL_MS = 6 * 60 * 60 * 1000;
-// A live run rewrites its lock's startedAt at this interval, so the TTL only ever expires
-// locks of runs that stopped heartbeating (crashed), however long a healthy run takes.
+/**
+ * A live run rewrites its lock's startedAt at this interval, so the TTL only ever expires
+ * locks of runs that stopped heartbeating (crashed), however long a healthy run takes.
+ */
 export const LOCK_HEARTBEAT_MS = 15 * 60 * 1000;
 
 export type TargetOptions = { heartbeatMs?: number; warn?: WarnFn };
@@ -88,23 +92,27 @@ export function buildManifest(cfg: Pick<Config, 'runId' | 'mode'>, entries: Mani
 }
 
 export interface StorageTarget {
-  // Local full loads resume by skipping completed canisters; S3 runs write to a
-  // fresh runId prefix, so skipping would leave holes in that run's file set.
+  /**
+   * Local full loads resume by skipping completed canisters; S3 runs write to a
+   * fresh runId prefix, so skipping would leave holes in that run's file set.
+   */
   readonly supportsResumeSkip: boolean;
   loadState(): Promise<IngestionState>;
   saveState(state: IngestionState): Promise<void>;
-  // `mode` is the EFFECTIVE mode of the caller (a sync run writes backfill and incremental
-  // files); it selects the path segment. Defaults to the target's own mode.
+  /**
+   * `mode` is the EFFECTIVE mode of the caller (a sync run writes backfill and incremental
+   * files); it selects the path segment. Defaults to the target's own mode.
+   */
   createSink(fileName: string, columns: readonly string[], mode?: Config['mode']): CsvSink;
-  // True when the file a previous run (runId) wrote for `mode` was fully committed.
+  /** True when the file a previous run (runId) wrote for `mode` was fully committed. */
   hasCommittedFile(runId: string, fileName: string, mode: Config['mode']): Promise<boolean>;
-  // S3 key prefixes this run created sinks under (empty for local runs).
+  /** S3 key prefixes this run created sinks under (empty for local runs). */
   writtenPrefixes(): string[];
   writeManifest(manifest: Manifest): Promise<void>;
   acquireRunLock(): Promise<boolean>;
-  // Heartbeat: extend the lock while we still own it; throws (and blocks later saves) if lost.
+  /** Heartbeat: extend the lock while we still own it; throws (and blocks later saves) if lost. */
   refreshRunLock(): Promise<void>;
-  // Deletes the lock only when its body still names this run.
+  /** Deletes the lock only when its body still names this run. */
   releaseRunLock(): Promise<void>;
 }
 

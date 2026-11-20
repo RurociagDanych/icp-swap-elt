@@ -1,15 +1,4 @@
-"""token_dim single-``as_of`` semantics.
-
-Real PyIceberg SQLite catalog + file:// warehouse (no mocks of the table layer).
-
-One nullable ``as_of`` column per ledger row = the timestamp of the latest observation applied.
-Within an object, per attribute the LATEST observation that supplies it wins; against the
-stored row a strictly newer object replaces every attribute it supplies, an equal/older one
-only fills NULLs (equal timestamp + different value: the greater value wins, decimals
-numerically); ``ICP`` always wins ``standard``; NO attribute conflict raises; every resolved
-conflict is reported. The fixtures mirror real contradictions seen in Dataset A (ICP/ICRC2,
-ICRC1/ICRC2, DIP20/ICRC2, differing decimals, a renamed symbol).
-"""
+"""token_dim single-as_of semantics on a real SQLite-backed Iceberg catalog."""
 
 from __future__ import annotations
 
@@ -36,18 +25,17 @@ from token_dimension import (  # noqa: E402
 )
 
 IDENT = lw.IDENT
-MX = "mxzaz-hqaaa-aaaar-qaada-cai"  # standard ICRC1 vs ICRC2
-XE = "xevnm-gaaaa-aaaar-qafnq-cai"  # standard ICRC1 vs ICRC2
-PH = "ph45x-riaaa-aaaak-afabq-cai"  # standard DIP20 vs ICRC2
-RY = lw.OTHER  # ryjl3-tyaaa-aaaaa-aaaba-cai: standard ICP vs ICRC2
-PA = "pa53d-4qaaa-aaaak-afaba-cai"  # decimals 18 vs 12
-S = "osxsl-naaaa-aaaah-adzna-cai"  # same-timestamp contradictions
+MX = "mxzaz-hqaaa-aaaar-qaada-cai"
+XE = "xevnm-gaaaa-aaaar-qafnq-cai"
+PH = "ph45x-riaaa-aaaak-afabq-cai"
+RY = lw.OTHER
+PA = "pa53d-4qaaa-aaaak-afaba-cai"
+S = "osxsl-naaaa-aaaah-adzna-cai"
 U = "uztta-ziaaa-aaaar-qaczq-cai"
-TS = 1702827259  # a real 0001 timestamp
+TS = 1702827259
 
 
 def conf_object(*rows):
-    """rows: (ts_seconds, ledger, symbol, standard, decimals) -> A-style object (token0)."""
     lines = [lw.A_HEADER] + [
         f"{ts},{ledger},{symbol},{standard},{decimals},,,," for ts, ledger, symbol, standard, decimals in rows
     ]
@@ -72,9 +60,6 @@ class Base(lw.Base):
         found = [c for c in report["conflicts"] if c["ledger_id"] == ledger and c["attr"] == attr]
         self.assertEqual(1, len(found), report["conflicts"])
         return found[0]
-
-
-# --------------------------------------------------------------------------- schema (no migration)
 
 
 class SchemaTests(Base):
@@ -112,7 +97,7 @@ class SchemaTests(Base):
                 catalog = self.new_catalog()
                 barrier.wait()
                 uuids.append(prepare_dim_target(catalog, IDENT).metadata.table_uuid)
-            except Exception as exc:  # noqa: BLE001 - report every failure
+            except Exception as exc:  # noqa: BLE001
                 errors.append(repr(exc))
 
         threads = [threading.Thread(target=worker) for _ in range(4)]
@@ -165,11 +150,8 @@ class SchemaTests(Base):
             if label in {"five_column", "seven_column", "extra_column", "only_symbol_as_of", "missing_column"}:
                 self.assertIn("ledger_id, symbol, name, standard, decimals, as_of", str(raised.exception), label)
             reloaded = self.catalog.load_table(ident)
-            self.assertEqual(location, reloaded.metadata_location, label)  # no evolution
+            self.assertEqual(location, reloaded.metadata_location, label)
             self.assertEqual(snapshots, [s.snapshot_id for s in reloaded.snapshots()], label)
-
-
-# --------------------------------------------------------------------------- in-object (real 0001)
 
 
 class RealInObjectConflictTests(Base):
@@ -231,7 +213,7 @@ class RealInObjectConflictTests(Base):
     def test_same_timestamp_decimals_compare_numerically(self):
         table = self.fresh_dim()
         self.apply(table, conf_object((7, PA, "", "", 9), (7, PA, "", "", 18)))
-        self.assertEqual(18, view(table, PA)[3])  # "9" > "18" as strings, but 18 > 9
+        self.assertEqual(18, view(table, PA)[3])
 
     def test_same_timestamp_names_greater_string_wins(self):
         table = self.fresh_dim()
@@ -268,10 +250,10 @@ class RealInObjectConflictTests(Base):
         report = self.apply(table, undated(b"aaa") + undated(b"bbb")[len(b"token0_id,token0_symbol\n"):])
         self.assertEqual(("bbb", None), (view(table, S)[0], view(table, S)[4]))
         self.assertEqual(1, report["conflicts_resolved"])
-        self.apply(table, undated(b"aaa"))  # undated vs stored undated: greater wins, no raise
+        self.apply(table, undated(b"aaa"))
         self.assertEqual("bbb", view(table, S)[0])
-        self.apply(table, lw.a_object((100, S, "dated")))  # a dated value outranks undated
-        self.apply(table, undated(b"zzz"))  # undated vs stored DATED = older: fills only
+        self.apply(table, lw.a_object((100, S, "dated")))
+        self.apply(table, undated(b"zzz"))
         self.assertEqual(("dated", lw.utc(100)), (view(table, S)[0], view(table, S)[4]))
 
     def test_unique_candidates_keeps_its_shape_and_resolves_instead_of_raising(self):
@@ -293,9 +275,6 @@ class RealInObjectConflictTests(Base):
         with self.assertRaises(MetadataError):
             apply_metadata(table, bad)
         self.assertIsNone(table.current_snapshot())
-
-
-# --------------------------------------------------------------------------- stored vs incoming
 
 
 class StoredVersusIncomingTests(Base):
@@ -339,10 +318,10 @@ class StoredVersusIncomingTests(Base):
 
     def test_icp_always_wins_standard_regardless_of_timestamps(self):
         stored_newer = self.seeded("synthetic.i1", standard="ICRC2", as_of=lw.utc(900))
-        self.apply(stored_newer, conf_object((100, MX, "", "ICP", "")))  # OLDER object, still ICP
+        self.apply(stored_newer, conf_object((100, MX, "", "ICP", "")))
         self.assertEqual(("ICP", lw.utc(900)), (view(stored_newer, MX)[2], view(stored_newer, MX)[4]))
         sticky = self.seeded("synthetic.i2", standard="ICP", as_of=lw.utc(100))
-        self.apply(sticky, conf_object((900, MX, "NEW", "ICRC2", "")))  # NEWER object, ICP stays
+        self.apply(sticky, conf_object((900, MX, "NEW", "ICRC2", "")))
         self.assertEqual(("NEW", "ICP", lw.utc(900)), (view(sticky, MX)[0], view(sticky, MX)[2], view(sticky, MX)[4]))
         self.assertEqual("ICP", self.conflict(self.apply(sticky, conf_object((900, MX, "", "ICRC1", ""))), MX, "standard")["chosen"])
 
@@ -352,9 +331,6 @@ class StoredVersusIncomingTests(Base):
         bad[0]["decimals"] = 2**70
         with self.assertRaises(MetadataError):
             apply_metadata(table, bad)
-
-
-# --------------------------------------------------------------------------- order independence
 
 
 OBJECTS = {
@@ -474,7 +450,6 @@ class PerAttributeTimestampTests(Base):
         table = self.fresh_dim()
         self.apply(table, conf_object((10, MX, "NEW", "", 8)))
         self.apply(table, conf_object((5, MX, "", "ICRC1", ""), (20, MX, "NEWER", "", "")))
-        # standard was NULL -> filled by the older observation; symbol replaced by t=20
         self.assertEqual(("NEWER", None, "ICRC1", 8, lw.utc(20)), view(table, MX))
 
 

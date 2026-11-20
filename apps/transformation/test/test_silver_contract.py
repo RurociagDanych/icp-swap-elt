@@ -237,13 +237,10 @@ class FlatSilverCsvTests(unittest.TestCase):
             return row
 
         ident = lambda row, dataset="A": silver_identity(row, dataset)  # noqa: E731
-        # B: genuine tx_hash
         self.assertEqual(ident({"tx_hash": "xy-1"}, "B"), ident({"tx_hash": "xy-1"}, "B"))
         self.assertNotEqual(ident({"tx_hash": "xy-1"}, "B"), ident({"tx_hash": "xy-2"}, "B"))
-        # A: the constant sentinel "hash" falls back to the composite key
         self.assertNotEqual(ident(a_row()), ident(a_row(timestamp="1776330549")))
         self.assertEqual(ident(a_row()), ident(a_row()))
-        # A: a real hash is used when present, distinct real hashes stay distinct
         self.assertNotEqual(ident(a_row(hash="abc-cai7930")), ident(a_row(hash="abc-cai7931")))
         self.assertEqual(
             ident(a_row(hash="abc-cai7930", amount_token0="5")),
@@ -253,7 +250,6 @@ class FlatSilverCsvTests(unittest.TestCase):
         # the sentinel is recognised case/whitespace-insensitively (the normalisation the
         # removed helper lacked)
         self.assertEqual(ident(a_row()), ident(a_row(hash=" HASH ")))
-        # every composite field participates (tokenN_change only when amount_tokenN is absent)
         for field, alt in (
             ("pool_id", "p2"), ("from", "bob"), ("to", "other"), ("action", "claim"),
             ("amount_token0", "6"), ("amount_token1", "3"), ("amount_usd", "99"),
@@ -326,16 +322,14 @@ class FlatSilverCsvTests(unittest.TestCase):
             "to": "b",
             "token0_id": "ledger0",
             "token1_id": "ledger1",
-            # 19 and 20 fractional digits (float64 repr of small values)
             "amount_token0": "0.0001115933237495279",
             "token0_change": "0.0001115933237495279",
             "amount_token1": "0.00010937604351238843",
             "token1_change": "0.00010937604351238843",
-            "amount_usd": "1.2345678901234567e-7",  # 23 fractional digits
+            "amount_usd": "1.2345678901234567e-7",
         }
         record, issues = normalize_silver(a_row, "A", LINEAGE)
         self.assertEqual(Decimal("0.000111593323749528"), record["token0_amount"])
-        # ...388|43 -> ...388 (the dropped digits are below half)
         self.assertEqual(Decimal("0.000109376043512388"), record["token1_amount"])
         self.assertEqual(Decimal("0.000000123456789012"), record["amount_usd"])
         self.assertEqual("ok", record["quality_status"])
@@ -360,7 +354,6 @@ class FlatSilverCsvTests(unittest.TestCase):
         from silver_contract import _bounded_amount
 
         issues: list = []
-        # exact ties at the 19th digit: HALF_EVEN goes to the even neighbour
         self.assertEqual(
             Decimal("0.000000000000000002"),
             _bounded_amount("0.0000000000000000025", issues, "f"),
@@ -380,7 +373,6 @@ class FlatSilverCsvTests(unittest.TestCase):
                 _bounded_amount("12345678901234567890.1234567890123456789", issues, "f"),
             )
         self.assertEqual(3, len(issues))
-        # rounding that carries into a 21st integral digit is still out of range
         with self.assertRaises(ValueError):
             _bounded_amount("99999999999999999999.9999999999999999999", [], "f")
 
@@ -389,7 +381,6 @@ class FlatSilverCsvTests(unittest.TestCase):
         text = "\n".join(
             (
                 header,
-                # 1.125 * 0.123456789012345678 has 21 fractional digits
                 "usd,1793363500000,Swap,pool,,,ledger0,ledger1,1.125,0,0,2,"
                 "0.123456789012345678",
             )
@@ -568,7 +559,6 @@ class FlatSilverCsvTests(unittest.TestCase):
         records, issues = parse(text, "B")
         self.assertEqual([], issues)
         self.assertEqual(1, len(records))
-        # tx_value is preferred over the price*amount fallback when both are present.
         self.assertEqual(Decimal("75.25"), records[0]["amount_usd"])
 
     def test_amount_usd_falls_back_to_price_times_amount_for_b_without_tx_value(self):

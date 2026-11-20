@@ -3,7 +3,7 @@ export type WarnFn = (msg: string) => void;
 export type RetryOptions = {
   baseDelayMs?: number;
   maxDelayMs?: number;
-  // Upper bound for a server-supplied Retry-After.
+  /** Upper bound for a server-supplied Retry-After. */
   maxRetryAfterMs?: number;
   sleep?: (ms: number) => Promise<void>;
   random?: () => number;
@@ -14,7 +14,6 @@ export const DEFAULT_RETRY_BASE_DELAY_MS = 1000;
 export const DEFAULT_RETRY_MAX_DELAY_MS = 16000;
 export const DEFAULT_MAX_RETRY_AFTER_MS = 60000;
 
-// An error that carries the HTTP status (and optional Retry-After) of a failed response.
 export class HttpError extends Error {
   constructor(message: string, readonly status: number, readonly retryAfterMs?: number) {
     super(message);
@@ -34,7 +33,7 @@ function statusOf(err: unknown): number | undefined {
   return undefined;
 }
 
-// 4xx responses (except 429 Too Many Requests) will not succeed on a retry.
+/** 4xx responses (except 429 Too Many Requests) will not succeed on a retry. */
 export function isRetryable(err: unknown): boolean {
   if (NON_RETRYABLE_NAMES.has((err as { name?: string } | undefined)?.name ?? '')) return false;
   const status = statusOf(err);
@@ -43,7 +42,7 @@ export function isRetryable(err: unknown): boolean {
   return !(status >= 400 && status < 500);
 }
 
-// Retry-After is either delta-seconds or an HTTP date.
+/** Retry-After is either delta-seconds or an HTTP date. */
 export function parseRetryAfter(value: string | null | undefined, now: number = Date.now()): number | undefined {
   if (!value) return undefined;
   const trimmed = value.trim();
@@ -59,8 +58,10 @@ function envNumber(name: string, fallback: number, min: number): number {
   return Number.isFinite(n) && n >= min ? n : fallback;
 }
 
-// `retries` is the total number of attempts. Defaults come from RETRY_ATTEMPTS /
-// RETRY_BASE_DELAY_MS / RETRY_MAX_DELAY_MS, read per call, falling back to 5 / 1s / 16s.
+/**
+ * `retries` is the total number of attempts. Defaults come from RETRY_ATTEMPTS /
+ * RETRY_BASE_DELAY_MS / RETRY_MAX_DELAY_MS, read per call, falling back to 5 / 1s / 16s.
+ */
 export async function withRetry<T>(
   fn: () => Promise<T>,
   label: string,

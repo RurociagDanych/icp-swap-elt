@@ -1,18 +1,4 @@
-"""Thread-safety guard for PyIceberg 0.8.1 scan planning.
-
-``DataScan.plan_files`` builds ONE ``_InclusiveMetricsEvaluator`` and then evaluates every
-manifest on a thread pool (``ExecutorFactory``). The evaluator keeps the bounds / counts of the
-file it is currently testing in INSTANCE attributes (``eval`` assigns them, the ``visit_*``
-methods read them), so two manifests evaluated concurrently overwrite each other's bounds: a
-file is then judged against another file's min/max and is intermittently pruned from (or
-wrongly added to) the plan. For the ``event_id`` lookup that means the data file written by
-the previous object can silently be missing from the next object's lookup, and the rows it
-holds would be stored twice.
-
-The guard serializes only the CPU-cheap in-memory ``eval`` call behind one lock; manifest I/O,
-the slow part, stays parallel. ``install()`` is idempotent and fails closed (``ImportError`` /
-``AttributeError`` at import time) if the PyIceberg internals it relies on ever change.
-"""
+"""Thread-safety guard for PyIceberg 0.8.1 scan planning."""
 
 from __future__ import annotations
 
@@ -21,11 +7,18 @@ import threading
 
 from pyiceberg.expressions.visitors import _InclusiveMetricsEvaluator
 
+# DataScan.plan_files builds ONE _InclusiveMetricsEvaluator and evaluates every manifest on a
+# thread pool. The evaluator keeps the bounds / counts of the file it is testing in INSTANCE
+# attributes, so concurrent manifests overwrite each other's bounds and a file is intermittently
+# pruned from the plan. For the event_id lookup that means the data file written by the
+# previous object can be missing, and its rows would be stored twice. Only the CPU-cheap
+# in-memory eval is serialized; manifest I/O stays parallel.
 _MARK = "_icp_swap_thread_safe_eval"
 _EVAL_LOCK = threading.RLock()
 
 
 def install() -> None:
+    """Wrap the evaluator in a lock; idempotent, and fails closed at import if internals change."""
     original = _InclusiveMetricsEvaluator.eval
     if getattr(original, _MARK, False):
         return

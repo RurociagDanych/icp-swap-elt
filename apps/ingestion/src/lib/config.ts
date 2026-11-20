@@ -19,9 +19,9 @@ export type Config = {
   backfillFloor?: number;
   backfillPagesPerFile: number;
   actionTypes: string;
-  // Event bus that receives IngestionRunFinished at the end of an S3 run; unset = no event.
+  /** Event bus that receives IngestionRunFinished at the end of an S3 run; unset = no event. */
   eventBus?: string;
-  // Non-fatal configuration notices; the entrypoint logs them at warn level.
+  /** Non-fatal configuration notices; the entrypoint logs them at warn level. */
   warnings: string[];
 };
 

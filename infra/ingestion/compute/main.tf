@@ -20,7 +20,7 @@ data "aws_s3_bucket" "raw_data" {
 }
 
 locals {
-  # The managed repository is IMMUTABLE: the task references an explicit, unique tag (image_tag).
+  # # The managed repository is IMMUTABLE: the task references an explicit, unique tag (image_tag).
   image_uri            = var.container_image != "" ? var.container_image : "${aws_ecr_repository.ingestion.repository_url}:${var.image_tag}"
   effective_vpc_id     = var.use_default_vpc ? data.aws_vpc.default[0].id : var.vpc_id
   effective_subnet_ids = var.use_default_vpc ? data.aws_subnets.default_vpc[0].ids : var.subnet_ids
@@ -42,8 +42,8 @@ resource "aws_cloudwatch_log_group" "ingestion" {
   tags              = local.common_tags
 }
 
-# Holds only build artifacts: force_delete lets `terraform destroy` remove it with images in it.
-# Tags are immutable; push every build under a unique tag or reference it by digest (image_tag).
+# # Holds only build artifacts: force_delete lets `terraform destroy` remove it with images in it.
+# # Tags are immutable; push every build under a unique tag or reference it by digest (image_tag).
 resource "aws_ecr_repository" "ingestion" {
   name                 = var.name_prefix
   image_tag_mutability = "IMMUTABLE"
@@ -124,8 +124,8 @@ resource "aws_iam_role" "ecs_task" {
 }
 
 data "aws_iam_policy_document" "task_s3_access" {
-  # GetBucketLocation has no s3:prefix context key; combined with the condition below it could
-  # never be satisfied, so it gets its own unconditioned statement.
+  # # GetBucketLocation has no s3:prefix context key; combined with the condition below it could
+  # # never be satisfied, so it gets its own unconditioned statement.
   statement {
     sid       = "ReadBucketLocation"
     effect    = "Allow"
@@ -161,10 +161,8 @@ data "aws_iam_policy_document" "task_s3_access" {
     resources = ["${data.aws_s3_bucket.raw_data.arn}/${var.s3_prefix}/*"]
   }
 
-  # Required to release the run lock on exit/SIGTERM; without it the lock leaks until its 6h TTL
-  # and blocks the next run. The lock object is <prefix>/locks/run.lock (apps/ingestion
-  # src/lib/storageTarget.ts, lockKey); that is the only object the application ever deletes.
-  # Delete on the ingested data itself (canister/, rest/) is denied by infra/ingestion/storage.
+  # # Required to release the run lock on exit/SIGTERM; without it the lock leaks until its 6h TTL
+  # # and blocks the next run. Deleting ingested data (canister/, rest/) is denied by ingestion/storage.
   statement {
     sid       = "DeleteRunLockOnly"
     effect    = "Allow"
@@ -223,8 +221,7 @@ resource "aws_ecs_task_definition" "ingestion" {
       image     = local.image_uri
       essential = true
       command   = var.container_command
-      # SIGTERM grace (Fargate maximum): the app releases its run lock and flushes on SIGTERM.
-      # Infra enforces no run-time limit of its own, see docs/RUNBOOK.md.
+      # # SIGTERM grace (Fargate maximum): the app releases its run lock and flushes on SIGTERM.
       stopTimeout = 120
       environment = concat(
         [
@@ -283,7 +280,7 @@ data "aws_iam_policy_document" "alerts_topic" {
     }
   }
 
-  # The scheduler alarms below publish to this topic through CloudWatch.
+  # # The scheduler alarms below publish to this topic through CloudWatch.
   statement {
     sid    = "AllowCloudWatchAlarmsPublish"
     effect = "Allow"
@@ -403,8 +400,8 @@ resource "aws_iam_role_policy_attachment" "scheduler_run_task" {
   policy_arn = aws_iam_policy.scheduler_run_task[0].arn
 }
 
-# A dedicated group, so the AWS/Scheduler metrics (dimension ScheduleGroup only) below belong to
-# this schedule alone and not to every schedule in the account's default group.
+# # A dedicated group, so the AWS/Scheduler metrics (dimension ScheduleGroup only) below belong to
+# # this schedule alone and not to every schedule in the account's default group.
 resource "aws_scheduler_schedule_group" "ingestion" {
   count = var.schedule_expression != "" ? 1 : 0
   name  = "${var.name_prefix}-schedules"
@@ -449,18 +446,9 @@ resource "aws_scheduler_schedule" "ingestion" {
   }
 }
 
-# --- Scheduler alerting (M5) -----------------------------------------------------------------------
-#
-# The task-failed rule only sees tasks that started. These two alarms cover the scheduler itself,
-# using the AWS/Scheduler metrics that exist (dimension ScheduleGroup):
-#  - TargetErrorCount: the scheduler called ecs:RunTask and it returned an error (permissions,
-#    throttling, invalid network configuration, ...).
-#  - InvocationAttemptCount: emitted for every invocation attempt; no datapoint for the whole
-#    window means the schedule did not fire at all (disabled, deleted, scheduler outage). Missing
-#    data counts as breaching. The window must be longer than the schedule interval.
-# CloudWatch metric delivery from the scheduler is best effort, so treat the missed-run alarm as a
-# safety net rather than an exact SLA.
-
+# # The task-failed rule only sees tasks that started; TargetErrorCount covers ecs:RunTask errors
+# # (permissions, throttling, bad network config). CloudWatch delivery from the scheduler is best
+# # effort, so treat these alarms as a safety net rather than an exact SLA.
 resource "aws_cloudwatch_metric_alarm" "scheduler_target_errors" {
   count               = var.schedule_expression != "" ? 1 : 0
   alarm_name          = "${var.name_prefix}-scheduler-target-errors"
@@ -480,6 +468,8 @@ resource "aws_cloudwatch_metric_alarm" "scheduler_target_errors" {
   tags          = local.common_tags
 }
 
+# # No InvocationAttemptCount datapoint for the whole window means the schedule did not fire at all;
+# # missing data counts as breaching. The window must be longer than the schedule interval.
 resource "aws_cloudwatch_metric_alarm" "scheduler_missed_run" {
   count               = var.schedule_expression != "" ? 1 : 0
   alarm_name          = "${var.name_prefix}-scheduler-missed-run"

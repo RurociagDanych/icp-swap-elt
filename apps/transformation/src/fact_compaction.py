@@ -1,37 +1,20 @@
 """In-job compaction of the Silver fact table (``icp_swap_events``).
 
-Why: every loaded object appends one data file, and the event_id lookup in
-``silver_persistence._plan_changes`` selects every file whose event-time statistics overlap the
-incoming object. Wide, overlapping backfill objects therefore make the selected-file count grow
-with every object until ``SILVER_MAX_SELECTED_FILES`` fails the load. Glue table optimizers are
-not used for this: they run at most every 24 h and commit concurrently with our writers.
+Every loaded object appends one data file, and the event_id lookup selects every file whose
+event-time statistics overlap the incoming object, so wide overlapping backfill objects make the
+selected-file count grow until ``SILVER_MAX_SELECTED_FILES`` fails the load. Glue table optimizers
+are not used: they run at most every 24 h and commit concurrently with our writers.
 
-PyIceberg 0.8.1 (pinned in requirements.txt) has no rewrite/compaction API (``Operation.REPLACE``
-exists as an enum value only, there is no ``rewrite_data_files``). Compaction is therefore built
-from the plumbing PyIceberg's own ``Transaction.delete`` uses for copy-on-write rewrites:
-read the input files (``ArrowScan``), write new files (``_dataframe_to_data_files``, the writer
-behind ``Transaction.append``) and replace exactly the input files in ONE overwrite snapshot
-(``update_snapshot().overwrite()`` + ``delete_data_file`` / ``append_data_file``). File-level
-replacement (not a predicate delete) is what allows bounded slices of a partition.
+PyIceberg 0.8.1 (pinned) has no rewrite API (``Operation.REPLACE`` is an enum value only), so
+compaction is built from the plumbing of ``Transaction.delete``: read the inputs (``ArrowScan``),
+write new files (``_dataframe_to_data_files``) and replace exactly the input files in ONE
+overwrite snapshot. File-level replacement is what allows bounded slices of a partition.
 
-Commit discipline (same as ``silver_persistence.ingest_one``):
-
-* one transaction per slice (a slice lies inside ONE year partition; a partition within the
-  caps is one slice, i.e. one transaction per partition), fenced by PyIceberg's
-  ``AssertRefSnapshotId(main = planned snapshot)``: any concurrent commit makes ours fail with
-  ``CommitFailedException`` and the slice is re-planned from the new snapshot;
-* bounded retries with ``utils.retry.backoff_delay``; staged files are deleted only when the
-  outcome is definitely "not committed" (exception before the commit, or ``CommitFailedException``);
-  any other commit error leaves them alone (the commit may have landed);
-* fail-closed: input caps (files/rows/bytes), a deadline, duplicate ``event_id`` in the input,
-  delete files, a foreign partition spec, and a pre- and post-commit content check all raise.
-
-Correctness: the output is the input re-ordered by ``(event_timestamp, event_id)`` and nothing
-else; the commit is refused unless the output row count and the written files' record counts
-equal the input, and after the commit the new files are read back through a fresh catalog load
-and compared, sorted by ``event_id``, with the input (all columns). Sorting by event time gives
-the new files narrow, mostly disjoint time ranges, so a lookup only selects the files whose days
-it touches.
+Commit discipline matches ``silver_persistence.ingest_one``: one transaction per slice (inside one
+year partition), fenced by ``AssertRefSnapshotId``; bounded retries; staged files are deleted only
+when the outcome is definitely "not committed"; every cap, duplicate, delete file, foreign
+partition spec or content mismatch fails closed. The output is the input re-ordered by
+``(event_timestamp, event_id)`` and nothing else, verified before and after the commit.
 """
 
 from __future__ import annotations
@@ -85,6 +68,7 @@ class MaintenanceIncomplete(IngestionError):
     The Lambda reports this as error type ``MaintenanceIncomplete``; the load state machine
     retries exactly this error a bounded number of times (each attempt resumes).
     """
+    pass
 
 
 def compaction_limits() -> dict[str, int]:
@@ -127,8 +111,7 @@ def _partition_key(data_file) -> tuple:
 
 
 def _time_lower_bound(table, data_file) -> int:
-    """Lower event_timestamp bound (micros) from the file statistics; files without one
-    (all-NULL timestamps) sort last."""
+    """Lower event_timestamp bound (micros); files without one (all-NULL timestamps) sort last."""
     field = table.schema().find_field("event_timestamp")
     raw = (data_file.lower_bounds or {}).get(field.field_id)
     if raw is None:
@@ -160,10 +143,9 @@ def _next_slice(table, tasks, limits, partitions):
 
     Small = fewer rows than the target. A partition qualifies once it holds MORE than
     ``partition_threshold`` data files in total (``SILVER_COMPACT_PARTITION_FILE_THRESHOLD``,
-    0 = no gate; keeps the daily run cheap: below the threshold nothing is read) and at least
-    ``min_files`` small files; its small files are taken in event-time order (lower bound)
-    while the file/row/byte caps allow. A single file above a cap is refused, never skipped
-    or truncated; a slice of one file would make no progress and is refused as well.
+    0 = no gate; keeps the daily run cheap) and at least ``min_files`` small files; they are
+    taken in event-time order while the file/row/byte caps allow. A single file above a cap is
+    refused, never skipped or truncated; a slice of one file makes no progress and is refused.
     """
     by_partition: dict[tuple, list] = {}
     totals: dict[tuple, int] = {}
@@ -220,15 +202,12 @@ def _by_event_id(data: pa.Table) -> pa.Table:
 
 
 def _new_rewrite(tx, io):
-    """The OVERWRITE snapshot producer behind ``Transaction.delete``'s file rewrites, with
-    correct summary totals.
+    """The OVERWRITE snapshot producer behind ``Transaction.delete``, with correct summary totals.
 
-    PyIceberg 0.8.1 summarizes every OVERWRITE as a full-table truncate
-    (``update_snapshot_summaries(truncate_full_table=True)``): after a compaction of 4 of 10
-    files the snapshot would claim ``deleted-data-files = 10`` and ``total-records`` = only the
-    rewritten rows. The data and manifests are right, the summary is not. This subclass
-    builds the summary exactly like ``_SnapshotProducer._summary`` but incrementally
-    (pinned by test_partition_above_the_file_cap_is_compacted_in_bounded_slices).
+    PyIceberg 0.8.1 summarizes every OVERWRITE as a full-table truncate, so after compacting 4
+    of 10 files the snapshot would claim ``deleted-data-files = 10``. The data and manifests are
+    right, the summary is not; this subclass builds the summary incrementally instead (pinned
+    by test_partition_above_the_file_cap_is_compacted_in_bounded_slices).
     """
     from pyiceberg.table.snapshots import (
         Operation,
@@ -275,7 +254,7 @@ def _new_rewrite(tx, io):
 
 
 def _rewrite_slice(table, planned_snapshot_id, key, tasks, limits, check_deadline):
-    """Stage and commit ONE slice. Returns the commit report.
+    """Stage and commit ONE slice; returns the commit report.
 
     Raises ``CommitFailedException`` (staged files already removed) when the catalog rejected
     the commit, so the caller can re-plan.
@@ -347,8 +326,10 @@ def _rewrite_slice(table, planned_snapshot_id, key, tasks, limits, check_deadlin
 
 
 def _verify_commit(table, old_tasks, new_files, data, check_deadline) -> None:
-    """Read-your-write through a fresh catalog load: old files gone, new files present and
-    holding exactly the input rows. Never repairs or deletes anything."""
+    """Read-your-write via a fresh catalog load: old files gone, new files hold exactly the input rows.
+
+    Never repairs or deletes anything.
+    """
     from pyiceberg.io.pyarrow import ArrowScan
 
     fresh = table.catalog.load_table(table.name())
@@ -395,10 +376,9 @@ def compact_table(
 ) -> dict[str, Any]:
     """Compact the small files of every qualifying year partition (or only ``partitions``).
 
-    ``deadline`` is an absolute ``time.monotonic()`` instant (the invocation deadline); the
-    effective one is the earlier of it and ``SILVER_DEADLINE_SECONDS`` from now. Returns a
-    slim summary; raises ``MaintenanceIncomplete`` after committing at least one slice when
-    the remaining time does not allow the next one (re-run to continue).
+    ``deadline`` is an absolute ``time.monotonic()`` instant; the effective one is the earlier of
+    it and ``SILVER_DEADLINE_SECONDS`` from now. Raises ``MaintenanceIncomplete`` after
+    committing at least one slice when the remaining time does not allow the next one.
     """
     limits = limits or compaction_limits()
     end = _monotonic() + limits["deadline_seconds"]
@@ -488,10 +468,9 @@ def compact_table(
 def compact_for_lookup(table, row_filter, trigger: int, *, deadline: float) -> dict | None:
     """Cheap per-object threshold check (``SILVER_COMPACT_TRIGGER_SELECTED_FILES``).
 
-    Plans the object's lookup (manifest metadata only, no data read). At or below ``trigger``
-    selected files it returns ``None`` and costs one extra planning pass; above it compacts
-    only the year partitions those files belong to. An incomplete compaction is reported, not
-    raised: the lookup's own cap check right after it stays the fail-closed guard.
+    Plans the lookup (metadata only). At or below ``trigger`` selected files it returns ``None``;
+    above it compacts only the year partitions those files belong to. An incomplete compaction
+    is reported, not raised: the lookup's own cap check right after stays the fail-closed guard.
     """
     selected = list(table.scan(row_filter=row_filter).plan_files())
     if len(selected) <= trigger:

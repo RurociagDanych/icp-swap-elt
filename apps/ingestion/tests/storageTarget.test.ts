@@ -325,7 +325,6 @@ test('H5: refreshRunLock heartbeats startedAt with If-Match and detects a lost l
 
   fake.store.set(key, { body: JSON.stringify({ runId: 'run-b', startedAt: new Date().toISOString() }), etag: '"b"' });
   await assert.rejects(() => a.refreshRunLock(), /lock/i);
-  // once the lock is lost, durable writes must stop
   await assert.rejects(() => a.saveState(defaultState()), /lock/i);
 });
 

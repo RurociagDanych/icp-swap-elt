@@ -50,7 +50,6 @@ Two independently deployable stages (`apps/ingestion`, TypeScript on Fargate; `a
 ### Repository layout
 
 ```
-```
 apps/
   ingestion/         TypeScript job: canister + REST ingestion to S3 (src/, tests/, scripts/, Dockerfile)
   transformation/    Python Lambdas: Silver load, compaction, quality (src/, test/, Dockerfile)
@@ -63,7 +62,6 @@ docs/
   SECURITY.md        IAM, delete protection, networking
 .github/workflows/ci.yml   Node build/tests, Python suite, terraform fmt/validate/test
 AGENTS.md            contributor guidelines
-```
 ```
 
 ## Quick start
@@ -124,12 +122,19 @@ CI (`.github/workflows/ci.yml`) runs all of these, for all four Terraform roots,
 
 AWS (ECS Fargate, Lambda, Step Functions, S3, Glue, Athena) with four Terraform roots under `infra/`. Apply each stage's storage root before its compute root. Deployment, verification and teardown: [docs/OPERATIONS.md](docs/OPERATIONS.md#runbook).
 
+## Known gaps
+
+- Container base images are floating tags, not pinned by digest: `node:22-slim` in `apps/ingestion/Dockerfile` and `public.ecr.aws/lambda/python:3.12` in `apps/transformation/Dockerfile`.
+- Python dependencies are pinned to exact versions in `requirements.txt` files without hashes; there is no `pyproject.toml` or `uv.lock`.
+- No linter or formatter is configured for TypeScript or Python, and CI runs none.
+- CI does not build the container images.
+- There is no `.env.example`.
+
 ## Docs index
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): stages, components, key design decisions, scale and limits.
 - [docs/OPERATIONS.md](docs/OPERATIONS.md): run modes, CLI, S3 layout, reliability and the runbook (deploy, verify, day-2 operations, teardown, stage wiring).
 - [docs/SECURITY.md](docs/SECURITY.md): IAM scoping, networking, state and delete protection.
-- [docs/RUNBOOK.md](docs/RUNBOOK.md): pointer to the runbook, now in OPERATIONS.md.
 
 ## License
 

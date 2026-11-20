@@ -1,13 +1,3 @@
-# infra/transformation/storage — persistent storage + catalog layer for the
-# transformation (Silver) stage: the Iceberg warehouse/processed bucket, the Athena
-# query-results bucket, a shared access-logs bucket, the Glue database that owns the
-# Iceberg tables, and the Athena workgroup used to query them.
-#
-# Mirrors infra/ingestion/storage's split (storage survives a compute teardown), but is a
-# separate root with its own buckets: the transformation stage never reuses or references
-# any bucket from the ingestion stage other than the raw bucket it reads from (that
-# reference lives in infra/transformation/compute, not here).
-
 variable "aws_region" {
   type    = string
   default = "us-east-1"
@@ -100,7 +90,7 @@ variable "athena_workgroup_name" {
 
 variable "athena_bytes_scanned_cutoff_bytes" {
   type        = number
-  default     = 10737418240 # 10 GiB
+  default     = 10737418240
   description = "Per-query Athena bytes-scanned cap enforced by the workgroup, as a cost guard against an unbounded ad hoc query."
 }
 

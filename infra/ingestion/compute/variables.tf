@@ -44,7 +44,7 @@ variable "use_default_vpc" {
 variable "subnet_ids" {
   type        = list(string)
   default     = []
-  description = "Subnets of the task ENIs. Required unless use_default_vpc is true. Private subnets need a route to the internet (NAT) because the task calls the Internet Computer and the ICPSwap API; see docs/RUNBOOK.md, \"Networking\"."
+  description = "Subnets of the task ENIs. Required unless use_default_vpc is true. Private subnets need a route to the internet (NAT) because the task calls the Internet Computer and the ICPSwap API; see docs/OPERATIONS.md, \"Networking\"."
 
   validation {
     condition     = var.use_default_vpc || (length(var.subnet_ids) > 0 && alltrue([for s in var.subnet_ids : can(regex("^subnet-[0-9a-f]{8,17}$", s))]))
@@ -97,8 +97,8 @@ variable "container_memory" {
 
 variable "container_command" {
   type = list(string)
-  # Scheduled runs use 'sync': backfill-if-needed then REST incremental. The
-  # one-time canister archive is run manually (apps/ingestion/scripts/aws_build_push_and_run.sh --mode canister).
+  # Scheduled runs use 'sync': backfill-if-needed then REST incremental. The one-time canister
+  # archive is run manually (apps/ingestion/scripts/aws_build_push_and_run.sh --mode canister).
   default = ["node", "dist/index.js", "--mode", "sync"]
 }
 

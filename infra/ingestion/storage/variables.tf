@@ -23,7 +23,7 @@ variable "s3_prefix" {
 variable "delete_exempt_principal_arns" {
   type        = list(string)
   default     = []
-  description = "IAM role/user ARNs (wildcards allowed) exempt from the bucket-policy Deny on s3:DeleteObject* below <s3_prefix>/canister/ and <s3_prefix>/rest/. Set it to your data-admin role to allow deliberate deletion and the full teardown (docs/RUNBOOK.md, section 5). Empty means nobody can delete ingested data until the policy is changed."
+  description = "IAM role/user ARNs (wildcards allowed) exempt from the bucket-policy Deny on s3:DeleteObject* below <s3_prefix>/canister/ and <s3_prefix>/rest/. Set it to your data-admin role to allow deliberate deletion and the full teardown (docs/OPERATIONS.md, runbook section 5). Empty means nobody can delete ingested data until the policy is changed."
 
   validation {
     condition     = alltrue([for a in var.delete_exempt_principal_arns : startswith(a, "arn:")])

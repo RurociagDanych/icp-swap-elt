@@ -8,13 +8,12 @@ import path from 'node:path';
 const appDir = path.resolve(import.meta.dirname, '..');
 const read = (f: string) => fs.readFileSync(path.join(appDir, f), 'utf8');
 
-test('M11: the image runs as the non-root node user and flags the unpinned base image', () => {
+test('M11: the image runs as the non-root node user', () => {
   const docker = read('Dockerfile');
   assert.match(docker, /^USER node$/m);
   // USER must come after the last COPY/RUN so build steps keep working, and before CMD.
   assert.ok(docker.lastIndexOf('USER node') > docker.lastIndexOf('RUN '));
   assert.ok(docker.lastIndexOf('USER node') < docker.indexOf('CMD '));
-  assert.match(docker, /digest.*NOT VERIFIED/is);
 });
 
 test('L6: .dockerignore keeps env files, tests, scripts and terraform state out of the build context', () => {

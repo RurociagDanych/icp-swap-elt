@@ -4,9 +4,12 @@ export type CanisterState = {
   lastTotal: number;
   lastRun?: string;
   recentHashes: string[];
-  completed?: boolean; // archival/full-complete marker
-  // Newest tx timestamp (epoch SECONDS) seen in this canister; persisted so the canister↔REST
-  // seam can be computed from all canisters even when a resume skips completed ones.
+  /** Archival/full-complete marker. */
+  completed?: boolean;
+  /**
+   * Newest tx timestamp (epoch SECONDS) seen in this canister; persisted so the canister/REST
+   * seam can be computed from all canisters even when a resume skips completed ones.
+   */
   maxTimestampSec?: number;
 };
 
@@ -16,9 +19,11 @@ export type RestState = {
   backfillFloor?: number;
   incrementalWatermark?: number;
   recentTxHashes: string[];
-  // Written BEFORE an incremental file is committed and cleared after state is saved. If a
-  // crash lands in between, the next run finds it and (if the file did commit) folds these
-  // hashes/watermark in so the rows are not re-emitted.
+  /**
+   * Written BEFORE an incremental file is committed and cleared after state is saved. If a
+   * crash lands in between, the next run finds it and (if the file did commit) folds these
+   * hashes/watermark in so the rows are not re-emitted.
+   */
   pendingIncremental?: PendingIncremental;
 };
 
@@ -41,8 +46,10 @@ export const defaultState = (): IngestionState => ({
 
 export const defaultRestState = (): RestState => ({ recentTxHashes: [] });
 
-// Cap on remembered tx hashes: must comfortably exceed the largest --overlap
-// anyone would pass, while keeping state.json and run memory small.
+/**
+ * Cap on remembered tx hashes: must comfortably exceed the largest --overlap
+ * anyone would pass, while keeping state.json and run memory small.
+ */
 export const RECENT_HASHES_LIMIT = 5000;
 
 export function pushBounded(target: string[], values: string[], limit = RECENT_HASHES_LIMIT): void {
@@ -114,7 +121,7 @@ export function parseState(text: string): IngestionState {
     canisters: parsed.canisters ?? {},
   };
 
-  // backward compatibility from old schema
+  // Backward compatibility with the old state schema.
   const anyParsed = parsed as any;
   if (!parsed.canisters && anyParsed?.latestStorageId) {
     state.canisters[anyParsed.latestStorageId] = {
@@ -132,7 +139,7 @@ export function loadState(path: string): IngestionState {
   return parseState(fs.readFileSync(path, 'utf8'));
 }
 
-// Write-then-rename so a crash never leaves a truncated state file behind.
+/** Write-then-rename so a crash never leaves a truncated state file behind. */
 export function saveState(path: string, state: IngestionState): void {
   const tmp = `${path}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`, 'utf8');

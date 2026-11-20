@@ -1,7 +1,3 @@
-# Load state machine definition, shared by two state machines that differ only in the Lambda
-# function they run on:
-#   - silver_backfill: historical loads, large aws_lambda_function.silver_backfill (10 GB).
-#   - silver_incremental_load: IngestionRunFinished events, small aws_lambda_function.silver (2048 MB).
 locals {
   load_state_machine_template = jsonencode({
     Comment = "Load: list raw CSV keys under the given prefixes into an S3 manifest, process each file via backfill_file, run the in-job table maintenance (mode=compact), then run the data-quality tests."
@@ -15,7 +11,6 @@ locals {
           FunctionName = "__LOAD_FUNCTION_ARN__"
           "Payload.$"  = "$"
         }
-        # Contract with apps/transformation (mode=list): {manifest_bucket, manifest_key, count}.
         ResultSelector = {
           "manifest.$" = "$.Payload"
         }
@@ -49,13 +44,13 @@ locals {
             "Key.$"    = "$.manifest.manifest_key"
           }
         }
+        # # Each invoke loads a whole source CSV into memory and commits an Iceberg write; unbounded
+        # # concurrency would multiply memory pressure and Glue-catalog commit contention.
         MaxConcurrency = var.backfill_max_concurrency
-        # One failed object fails the load; redrive re-runs only the failed items.
+        # # One failed object fails the load; redrive re-runs only the failed items.
         ToleratedFailurePercentage = 0
-        # Discard the per-object results: the aggregate of all iterations is ONE state output
-        # and Step Functions fails the whole execution with States.DataLimitExceeded above
-        # 256 KiB, which a few hundred per-object results exceed.
-        # Per-object results stay in the execution history and in the Lambda log.
+        # # Discard per-object results: the aggregate is ONE state output and Step Functions fails above
+        # # 256 KiB (States.DataLimitExceeded). Per-object results stay in the history and the Lambda log.
         ResultPath = null
         ItemProcessor = {
           ProcessorConfig = { Mode = "DISTRIBUTED", ExecutionType = "STANDARD" }
@@ -71,7 +66,6 @@ locals {
                   "key.$" = "$"
                 }
               }
-              # Keep only the (already slimmed) Lambda payload, not the invoke SDK envelope.
               ResultSelector = {
                 "result.$" = "$.Payload"
               }
@@ -87,10 +81,8 @@ locals {
         }
         Next = "CompactTable"
       }
-      # In-job maintenance, serially after the whole Map (no writer of this execution is
-      # running; reserved concurrency 1 throttles any other one): compaction of
-      # icp_swap_events, snapshot retention of both tables, orphan cleanup of token_dim only.
-      # Glue table optimizers are not relied on (24 h cadence, concurrent second writer).
+      # # In-job maintenance, serially after the whole Map (no writer of this execution is running;
+      # # reserved concurrency 1 throttles any other one). Glue table optimizers are not relied on.
       CompactTable = merge(local.compact_state_base, {
         TimeoutSeconds = "__LOAD_TIMEOUT__"
         Parameters = {
@@ -117,10 +109,8 @@ resource "aws_cloudwatch_log_group" "sfn_incremental" {
   tags              = local.common_tags
 }
 
-# Event-driven incremental load: list the run's raw keys, process each file, compact, quality.
-# Every Lambda task runs on the small silver function. A file that does not fit its timeout fails
-# the execution; fix the cause and start a new silver_backfill execution with the same prefixes
-# (see docs/RUNBOOK.md).
+# # A file that does not fit its timeout fails the execution; fix the cause and start a new
+# # silver_backfill execution with the same prefixes (docs/OPERATIONS.md).
 resource "aws_sfn_state_machine" "silver_incremental_load" {
   name     = "${var.name_prefix}-incremental"
   role_arn = aws_iam_role.sfn_execution.arn

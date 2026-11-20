@@ -1,8 +1,8 @@
 data "aws_partition" "current" {}
 
 locals {
-  # The managed repository is IMMUTABLE: functions reference an explicit, unique tag (or digest)
-  # via image_tag; there is no ":latest" to overwrite.
+  # # The managed repository is IMMUTABLE: functions reference an explicit, unique tag (or digest)
+  # # via image_tag; there is no ":latest" to overwrite.
   image_uri = var.container_image != "" ? var.container_image : "${aws_ecr_repository.transformation.repository_url}:${var.image_tag}"
 
   common_tags = merge(
@@ -23,14 +23,14 @@ locals {
 
   raw_bucket_arn       = "arn:${data.aws_partition.current.partition}:s3:::${var.raw_bucket_name}"
   processed_bucket_arn = "arn:${data.aws_partition.current.partition}:s3:::${var.processed_bucket_name}"
-  # Iceberg tables live below the Glue database location s3://<processed>/warehouse/ (see
-  # infra/transformation/storage); every object-level grant on the processed bucket is confined to it.
+  # # Iceberg tables live below the Glue database location s3://<processed>/warehouse/; every
+  # # object-level grant on the processed bucket is confined to it.
   warehouse_objects_arn = "${local.processed_bucket_arn}/warehouse/*"
-  # Manifests written by the list step (see docs/RUNBOOK.md "Load state machine contract").
+  # # Manifests written by the list step (docs/OPERATIONS.md, "Load state machine contract").
   manifest_objects_arn = "${local.processed_bucket_arn}/${var.manifest_prefix}/*"
 
-  # Constructed, not referenced: the backfill state machine's own role must be allowed to start
-  # child executions of that very state machine (Distributed Map), which would otherwise be a cycle.
+  # # Constructed, not referenced: the backfill state machine's own role must be allowed to start
+  # # child executions of that very state machine (Distributed Map), which would otherwise be a cycle.
   backfill_state_machine_arn = "arn:${data.aws_partition.current.partition}:states:${var.aws_region}:${var.aws_account_id}:stateMachine:${var.name_prefix}-backfill"
   backfill_execution_arns    = "arn:${data.aws_partition.current.partition}:states:${var.aws_region}:${var.aws_account_id}:execution:${var.name_prefix}-backfill/*"
   alarm_source_arn_pattern   = "arn:${data.aws_partition.current.partition}:cloudwatch:${var.aws_region}:${var.aws_account_id}:alarm:${var.name_prefix}-*"
@@ -54,9 +54,8 @@ resource "aws_cloudwatch_log_group" "quality" {
   tags              = local.common_tags
 }
 
-# The repository holds only build artifacts (no data): force_delete lets `terraform destroy`
-# remove it with images in it. Tags are immutable, so every push needs a unique tag or is
-# referenced by digest; the Lambda functions are pointed at it with `image_tag`.
+# # The repository holds only build artifacts (no data): force_delete lets `terraform destroy`
+# # remove it with images in it. Tags are immutable, so every push needs a unique tag or digest.
 resource "aws_ecr_repository" "transformation" {
   name                 = var.name_prefix
   image_tag_mutability = "IMMUTABLE"
@@ -69,20 +68,11 @@ resource "aws_ecr_repository" "transformation" {
   tags = local.common_tags
 }
 
-# --- Dead-letter queue for async-invoke failures of the Lambdas (silver, silver_backfill) and for undeliverable ingestion events ---
-
 resource "aws_sqs_queue" "silver_dlq" {
   name                      = "${var.name_prefix}-silver-dlq"
   message_retention_seconds = var.dlq_retention_days * 24 * 3600
   tags                      = local.common_tags
 }
-
-# --- Lambda execution roles ------------------------------------------------------------------
-#
-# Two roles: `lambda_execution` is the WRITER role shared by silver and silver_backfill (they
-# run the same code path and write the Iceberg tables); `quality` is READ-ONLY and has a role of
-# its own (apps/transformation/src/quality_job.py only loads the tables through PyIceberg and
-# writes to /tmp, see the grep evidence in docs/RUNBOOK.md).
 
 data "aws_iam_policy_document" "lambda_assume_role" {
   statement {
@@ -106,6 +96,9 @@ resource "aws_iam_role_policy_attachment" "lambda_basic_execution" {
   policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
+# # `lambda_execution` is the WRITER role shared by silver and silver_backfill (same code path);
+# # `quality` is READ-ONLY with its own role (quality_job.py only loads tables via PyIceberg and
+# # writes to /tmp).
 data "aws_iam_policy_document" "lambda_permissions" {
   statement {
     sid       = "ListRawBucketWithinPrefix"
@@ -140,9 +133,9 @@ data "aws_iam_policy_document" "lambda_permissions" {
     resources = [local.warehouse_objects_arn]
   }
 
-  # Not prefix-conditioned on purpose: an s3:prefix condition makes bucket-level calls without a
-  # prefix parameter (HeadBucket, which the S3 filesystem layer may issue) fail. The processed
-  # bucket only holds the warehouse and the list manifests, and all object access stays confined.
+  # # Not prefix-conditioned on purpose: an s3:prefix condition makes bucket-level calls without a
+  # # prefix parameter (HeadBucket, which the S3 filesystem layer may issue) fail. The bucket only
+  # # holds the warehouse and list manifests, and all object access stays confined.
   statement {
     sid       = "ListProcessedBucket"
     effect    = "Allow"
@@ -197,7 +190,6 @@ resource "aws_iam_role_policy_attachment" "lambda_permissions" {
   policy_arn = aws_iam_policy.lambda_permissions.arn
 }
 
-# Read-only role of the quality Lambda: no S3 write/delete, no Glue write, no SQS.
 resource "aws_iam_role" "quality" {
   name               = "${var.name_prefix}-quality"
   assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
@@ -253,13 +245,6 @@ resource "aws_iam_role_policy_attachment" "quality_permissions" {
   policy_arn = aws_iam_policy.quality_permissions.arn
 }
 
-# --- transformation Lambda (small): list / incremental / token_metadata ---------------------
-#
-# Incremental daily runs only ever see a day's worth of objects, so this function stays small.
-# It can still serve backfill_file for a single ad-hoc small object, but the historical reload
-# runs on aws_lambda_function.silver_backfill below (Lambda memory is per FUNCTION, not per
-# invocation, hence a second function over the same image instead of an override).
-
 resource "aws_lambda_function" "silver" {
   function_name = "${var.name_prefix}-silver"
   role          = aws_iam_role.lambda_execution.arn
@@ -268,8 +253,8 @@ resource "aws_lambda_function" "silver" {
   memory_size   = var.silver_memory_size_mb
   timeout       = var.silver_timeout_seconds
 
-  # Bounds parallel Iceberg commits from this function (optimistic-concurrency contention on the
-  # Glue table); see docs/RUNBOOK.md "Concurrency".
+  # # Bounds parallel Iceberg commits from this function (optimistic-concurrency contention on the
+  # # Glue table); see docs/OPERATIONS.md "Concurrency".
   reserved_concurrent_executions = var.silver_reserved_concurrency
 
   image_config {
@@ -278,19 +263,16 @@ resource "aws_lambda_function" "silver" {
 
   environment {
     variables = {
-      RAW_BUCKET                        = var.raw_bucket_name
-      RAW_PREFIX                        = "${var.raw_prefix}/"
-      PROCESSED_BUCKET                  = var.processed_bucket_name
-      GLUE_DATABASE                     = var.glue_database_name
-      TABLE_NAME                        = var.glue_table_name
-      SILVER_TARGET_GENERATION          = var.silver_target_generation
-      SILVER_MAX_SOURCE_BYTES           = tostring(var.silver_max_source_bytes)
-      SILVER_MAX_SOURCE_ROWS            = tostring(var.silver_max_source_rows)
-      SILVER_DEADLINE_SECONDS           = tostring(var.silver_deadline_seconds)
-      TOKEN_METADATA_MAX_RESPONSE_BYTES = tostring(var.token_metadata_max_response_bytes)
-      # In-job table maintenance (mode=compact, CompactTable step of the daily state machine).
-      # Smaller read caps than silver_backfill: this function has 2048 MB. No per-object
-      # trigger: daily objects are small and narrow.
+      RAW_BUCKET                              = var.raw_bucket_name
+      RAW_PREFIX                              = "${var.raw_prefix}/"
+      PROCESSED_BUCKET                        = var.processed_bucket_name
+      GLUE_DATABASE                           = var.glue_database_name
+      TABLE_NAME                              = var.glue_table_name
+      SILVER_TARGET_GENERATION                = var.silver_target_generation
+      SILVER_MAX_SOURCE_BYTES                 = tostring(var.silver_max_source_bytes)
+      SILVER_MAX_SOURCE_ROWS                  = tostring(var.silver_max_source_rows)
+      SILVER_DEADLINE_SECONDS                 = tostring(var.silver_deadline_seconds)
+      TOKEN_METADATA_MAX_RESPONSE_BYTES       = tostring(var.token_metadata_max_response_bytes)
       SILVER_COMPACT_TARGET_FILE_ROWS         = tostring(var.silver_backfill_compact_target_file_rows)
       SILVER_COMPACT_MIN_INPUT_FILES          = tostring(var.silver_backfill_compact_min_input_files)
       SILVER_COMPACT_MAX_INPUT_FILES          = tostring(var.silver_backfill_compact_max_input_files)
@@ -328,14 +310,9 @@ resource "aws_lambda_function" "silver" {
   tags = local.common_tags
 }
 
-# --- transformation backfill Lambda (large): the one-time historical reload, invoked by the backfill state
-# machine only. Same image, entrypoint, env and role as `silver`; differs ONLY in memory/timeout and
-# its own soft deadline. A 100-200 MB / 200k-row object needs several GiB resident (decoded text +
-# normalised rows + Arrow), far above what the 2048 MB incremental function should carry.
-#
-# NOTE: AWS accounts can be capped at 3008 MB Lambda memory until a Service Quotas increase is
-# granted; that limit only surfaces at apply time (CreateFunction/UpdateFunctionConfiguration).
-
+# # Same image, entrypoint, env and role as `silver`; differs only in memory/timeout and soft deadline
+# # (Lambda memory is per FUNCTION, so a second function). AWS accounts can be capped at 3008 MB
+# # until a Service Quotas increase; that only surfaces at apply time.
 resource "aws_lambda_function" "silver_backfill" {
   function_name = "${var.name_prefix}-silver-backfill"
   role          = aws_iam_role.lambda_execution.arn
@@ -344,9 +321,8 @@ resource "aws_lambda_function" "silver_backfill" {
   memory_size   = var.silver_backfill_memory_size_mb
   timeout       = var.silver_backfill_timeout_seconds
 
-  # Hard ceiling on parallel invocations of the writer, independent of how many Step Functions
-  # executions overlap: each execution's Map is bounded by backfill_max_concurrency, but two
-  # overlapping executions would otherwise double it.
+  # # Hard ceiling on parallel invocations of the writer: two overlapping executions would otherwise
+  # # double the Map bound (backfill_max_concurrency).
   reserved_concurrent_executions = var.silver_backfill_reserved_concurrency
 
   image_config {
@@ -355,21 +331,19 @@ resource "aws_lambda_function" "silver_backfill" {
 
   environment {
     variables = {
-      RAW_BUCKET                        = var.raw_bucket_name
-      RAW_PREFIX                        = "${var.raw_prefix}/"
-      PROCESSED_BUCKET                  = var.processed_bucket_name
-      GLUE_DATABASE                     = var.glue_database_name
-      TABLE_NAME                        = var.glue_table_name
-      SILVER_TARGET_GENERATION          = var.silver_target_generation
-      SILVER_MAX_SOURCE_BYTES           = tostring(var.silver_max_source_bytes)
-      SILVER_MAX_SOURCE_ROWS            = tostring(var.silver_max_source_rows)
-      SILVER_DEADLINE_SECONDS           = tostring(var.silver_backfill_deadline_seconds)
-      SILVER_MAX_SELECTED_FILES         = tostring(var.silver_backfill_max_selected_files)
-      SILVER_MAX_SELECTED_ROWS          = tostring(var.silver_backfill_max_selected_rows)
-      SILVER_MAX_SELECTED_BYTES         = tostring(var.silver_backfill_max_selected_bytes)
-      TOKEN_METADATA_MAX_RESPONSE_BYTES = tostring(var.token_metadata_max_response_bytes)
-      # In-job table maintenance (mode=compact, run by the CompactTable step after the Map;
-      # apps/transformation/src/fact_compaction.py and table_maintenance.py).
+      RAW_BUCKET                              = var.raw_bucket_name
+      RAW_PREFIX                              = "${var.raw_prefix}/"
+      PROCESSED_BUCKET                        = var.processed_bucket_name
+      GLUE_DATABASE                           = var.glue_database_name
+      TABLE_NAME                              = var.glue_table_name
+      SILVER_TARGET_GENERATION                = var.silver_target_generation
+      SILVER_MAX_SOURCE_BYTES                 = tostring(var.silver_max_source_bytes)
+      SILVER_MAX_SOURCE_ROWS                  = tostring(var.silver_max_source_rows)
+      SILVER_DEADLINE_SECONDS                 = tostring(var.silver_backfill_deadline_seconds)
+      SILVER_MAX_SELECTED_FILES               = tostring(var.silver_backfill_max_selected_files)
+      SILVER_MAX_SELECTED_ROWS                = tostring(var.silver_backfill_max_selected_rows)
+      SILVER_MAX_SELECTED_BYTES               = tostring(var.silver_backfill_max_selected_bytes)
+      TOKEN_METADATA_MAX_RESPONSE_BYTES       = tostring(var.token_metadata_max_response_bytes)
       SILVER_COMPACT_TARGET_FILE_ROWS         = tostring(var.silver_backfill_compact_target_file_rows)
       SILVER_COMPACT_MIN_INPUT_FILES          = tostring(var.silver_backfill_compact_min_input_files)
       SILVER_COMPACT_MAX_INPUT_FILES          = tostring(var.silver_backfill_compact_max_input_files)
@@ -380,7 +354,6 @@ resource "aws_lambda_function" "silver_backfill" {
       SILVER_SNAPSHOT_RETENTION_DAYS          = tostring(var.snapshot_retention_days)
       SILVER_SNAPSHOTS_TO_RETAIN              = tostring(var.snapshots_to_retain)
       SILVER_ORPHAN_GRACE_DAYS                = tostring(var.orphan_file_retention_days)
-      # Where mode=list writes its JSON manifest (contract in docs/RUNBOOK.md).
     }
   }
 
@@ -419,18 +392,9 @@ resource "aws_lambda_function" "silver_backfill" {
   tags = local.common_tags
 }
 
-# --- Quality Lambda: dbt (dbt-duckdb) data-quality tests over the Silver tables ---------------
-#
-# Same image, other entrypoint (quality_job.handler). It streams the fact table and token_dim
-# through PyIceberg into a DuckDB file under /tmp and runs `dbt test` (apps/transformation/src/quality_dbt).
-# Error-severity failures raise, so the Lambda error alarm below notifies the alerts topic;
-# warn-severity results are returned in the report only.
-#
-# No dead-letter queue (accepted, review finding L3): a Lambda DLQ only receives failures of
-# ASYNCHRONOUS invocations, and this function is only ever invoked synchronously (Step Functions
-# lambda:invoke, or `aws lambda invoke` by hand), so the DLQ would stay empty. A failure
-# surfaces as a failed state machine execution and through the quality_errors alarm below.
-
+# # Same image, other entrypoint: dbt tests over the Silver tables. Error-severity failures raise,
+# # so the error alarm notifies. No DLQ (accepted): a DLQ only receives async-invoke failures and
+# # this function is only invoked synchronously, so it would stay empty.
 resource "aws_lambda_function" "quality" {
   function_name = "${var.name_prefix}-quality"
   role          = aws_iam_role.quality.arn
@@ -472,8 +436,6 @@ resource "aws_lambda_function" "quality" {
   tags = local.common_tags
 }
 
-# --- Failure alerting: SNS topic + CloudWatch alarms on Lambda errors and DLQ depth -----------
-
 resource "aws_sns_topic" "alerts" {
   name = "${var.name_prefix}-alerts"
   tags = local.common_tags
@@ -499,8 +461,8 @@ data "aws_iam_policy_document" "alerts_topic" {
     }
   }
 
-  # The alarms below use this topic as alarm_actions; without this statement CloudWatch is not
-  # allowed to publish and every alarm notification is dropped silently.
+  # # The alarms below use this topic as alarm_actions; without this statement CloudWatch is not
+  # # allowed to publish and every alarm notification is dropped silently.
   statement {
     sid    = "AllowCloudWatchAlarmsPublish"
     effect = "Allow"
@@ -611,8 +573,6 @@ resource "aws_cloudwatch_metric_alarm" "silver_dlq_depth" {
   tags          = local.common_tags
 }
 
-# --- Orchestration: Step Functions wrap the transformation Lambdas; EventBridge Scheduler drives them ------
-
 data "aws_iam_policy_document" "sfn_assume_role" {
   statement {
     actions = ["sts:AssumeRole"]
@@ -635,7 +595,6 @@ data "aws_iam_policy_document" "sfn_invoke_silver" {
     sid     = "InvokePipelineLambdas"
     effect  = "Allow"
     actions = ["lambda:InvokeFunction"]
-    # daily state machine -> silver; load state machine -> silver_backfill; both end with quality
     resources = [
       aws_lambda_function.silver.arn,
       aws_lambda_function.silver_backfill.arn,
@@ -655,8 +614,8 @@ resource "aws_iam_role_policy_attachment" "sfn_invoke_silver" {
   policy_arn = aws_iam_policy.sfn_invoke_silver.arn
 }
 
-# The load Map reads its item list (a JSON array of raw keys) from the manifest object the list
-# step wrote: read access to that prefix and nothing else.
+# # The load Map reads its item list from the manifest object the list step wrote: read access to
+# # that prefix and nothing else.
 data "aws_iam_policy_document" "sfn_read_manifests" {
   statement {
     sid       = "ReadListManifests"
@@ -677,8 +636,8 @@ resource "aws_iam_role_policy_attachment" "sfn_read_manifests" {
   policy_arn = aws_iam_policy.sfn_read_manifests.arn
 }
 
-# Distributed Map runs every item as a child execution of the load state machine itself, and
-# both state machines deliver execution logs to CloudWatch Logs.
+# # Distributed Map runs every item as a child execution of the load state machine itself, and
+# # both state machines deliver execution logs to CloudWatch Logs.
 data "aws_iam_policy_document" "sfn_runtime" {
   statement {
     sid       = "StartOwnChildExecutions"
@@ -698,8 +657,8 @@ data "aws_iam_policy_document" "sfn_runtime" {
     resources = [local.backfill_execution_arns, local.incremental_execution_arns]
   }
 
-  # Log delivery management does not support resource-level permissions: AWS documents "*" for
-  # exactly these actions (Step Functions "Logging using CloudWatch Logs" IAM policy).
+  # # Log delivery management does not support resource-level permissions: AWS documents "*" for
+  # # exactly these actions (Step Functions "Logging using CloudWatch Logs" IAM policy).
   statement {
     sid    = "DeliverExecutionLogs"
     effect = "Allow"
@@ -728,17 +687,16 @@ resource "aws_iam_role_policy_attachment" "sfn_runtime" {
   policy_arn = aws_iam_policy.sfn_runtime.arn
 }
 
-# Execution logs (level ERROR, no execution data: payloads carry S3 keys and are not logged).
+# # Execution logs (level ERROR, no execution data: payloads carry S3 keys and are not logged).
 resource "aws_cloudwatch_log_group" "sfn_backfill" {
   name              = "/aws/vendedlogs/states/${var.name_prefix}-backfill"
   retention_in_days = var.log_retention_days
   tags              = local.common_tags
 }
 
-# Last step of both state machines: the dbt data-quality tests over the freshly loaded tables.
-# Only transient Lambda service errors are retried; a failed quality test (error severity) is
-# not, so the execution fails and the quality Lambda's error alarm notifies the alerts topic.
 locals {
+  # # Last step of both state machines. Only transient Lambda errors are retried; a failed quality
+  # # test (error severity) is not, so the execution fails and the quality error alarm notifies.
   quality_state = {
     Type           = "Task"
     Resource       = "arn:aws:states:::lambda:invoke"
@@ -757,15 +715,12 @@ locals {
   }
 }
 
-# In-job table maintenance step (mode=compact), shared by both state machines; each sets its own
-# FunctionName and TimeoutSeconds. Order inside the Lambda: compaction of icp_swap_events,
-# snapshot retention of both tables, orphan cleanup of token_dim only. Glue table optimizers are
-# not relied on (24 h cadence, concurrent second writer).
 locals {
+  # # In-job table maintenance (mode=compact), shared by both state machines. Glue table optimizers
+  # # are not relied on (24 h cadence, concurrent second writer).
   compact_state_base = {
     Type     = "Task"
     Resource = "arn:aws:states:::lambda:invoke"
-    # Keep only the slim counts summary next to the execution input.
     ResultSelector = {
       "summary.$" = "$.Payload"
     }
@@ -777,10 +732,9 @@ locals {
         MaxAttempts     = 3
         BackoffRate     = 2.0
       },
+      # # Compaction committed bounded progress but work remains (time): each retry resumes.
+      # # Any other error (cap refusal, duplicate event_id, verification) fails before the quality check.
       {
-        # Compaction committed bounded progress but work remains (time): each retry resumes.
-        # Any other error (cap refusal, duplicate event_id, verification, fence retry budget)
-        # fails the execution before the quality check.
         ErrorEquals     = ["MaintenanceIncomplete"]
         IntervalSeconds = 5
         MaxAttempts     = var.maintenance_incomplete_max_attempts
@@ -791,19 +745,9 @@ locals {
   }
 }
 
-# Load: execution input is {"mode":"list","prefixes":[...]}. The list step runs the large
-# silver_backfill function once; it writes the raw CSV keys under those prefixes as a JSON array
-# to an S3 manifest object and returns only {manifest_bucket, manifest_key, count}, so the key
-# list can never hit the 256 KiB state-payload limit. A Distributed Map then reads that manifest
-# (ItemReader, S3 JSON) and fans out one backfill_file invoke per key with bounded concurrency
-# (each invoke loads a whole source CSV into memory and commits an Iceberg write; unbounded
-# concurrency would multiply both memory pressure and Glue-catalog commit contention). Every
-# task invokes the dedicated large aws_lambda_function.silver_backfill, never the 2048 MB `silver`.
-#
-# Failure policy: ToleratedFailurePercentage = 0. One object that fails all retries fails the
-# Map and the execution, which raises the silver_backfill error alarm; after fixing the cause,
-# `aws stepfunctions redrive-execution` re-runs only the failed items. Loading is idempotent
-# (event_id dedup), so redriving or restarting never double-loads.
+# # Load failure policy: one object that fails all retries fails the Map and the execution, which
+# # raises the silver_backfill error alarm. Redrive re-runs only the failed items; loading is
+# # idempotent (event_id dedup), so a redrive or restart never double-loads.
 resource "aws_sfn_state_machine" "silver_backfill" {
   name     = "${var.name_prefix}-backfill"
   role_arn = aws_iam_role.sfn_execution.arn
@@ -820,8 +764,6 @@ resource "aws_sfn_state_machine" "silver_backfill" {
 
   tags = local.common_tags
 }
-
-# --- Cost guardrail: alert well before a runaway Lambda/Glue bill is noticed any other way ---
 
 resource "aws_budgets_budget" "transformation" {
   name         = "${var.name_prefix}-monthly-cost-guard"
@@ -852,15 +794,8 @@ resource "aws_budgets_budget" "transformation" {
   }
 }
 
-# --- Event trigger: ingestion announces what it wrote, the load state machine loads exactly that --
-#
-# apps/ingestion publishes IngestionRunFinished (also after a failed run, for the files it had
-# already committed) with the S3 prefixes of the run. The rule hands those prefixes to the
-# silver_backfill state machine as {"mode":"list","prefixes":[...]}, which lists the CSVs under
-# them once and fans out one backfill_file invocation per object. Loading is idempotent, so a
-# redelivered or re-started event changes nothing. Undeliverable events land in the DLQ, whose
-# depth alarm already notifies the alerts topic.
-
+# # Loading is idempotent, so a redelivered or re-started event changes nothing. Undeliverable
+# # events land in the DLQ, whose depth alarm already notifies the alerts topic.
 resource "aws_cloudwatch_event_rule" "ingestion_finished" {
   count          = var.trigger_on_ingestion_events ? 1 : 0
   name           = "${var.name_prefix}-ingestion-finished"
@@ -972,25 +907,9 @@ resource "aws_sqs_queue_policy" "dlq_from_events" {
   policy    = data.aws_iam_policy_document.dlq_from_events[0].json
 }
 
-# --- Glue Data Catalog table optimizers (managed Iceberg maintenance) -------------------------
-#
-# NOT relied on: compaction, snapshot retention and token_dim orphan cleanup run in our own job
-# (mode=compact, CompactTable step of both state machines). Recommended: keep
-# enable_table_optimizers = false; when on, Glue is a second, concurrent writer on the same
-# tables (apps/transformation/README.md, "Table maintenance").
-#
-# Compaction, snapshot retention and orphan-file deletion run inside the Glue Data Catalog; no
-# Lambda, no Athena. The tables are created by the transformation on first load (design
-# invariant 2), and an optimizer needs an existing table, so enable_table_optimizers stays off
-# until the first load has created them (docs/RUNBOOK.md, section 6).
-#
-#  - icp_swap_events: compaction + snapshot retention. NO orphan-file deletion: the per-object
-#    quarantine artifacts live inside the table location (silver-quarantine/<generation>/) and
-#    are not referenced by Iceberg metadata, so the orphan cleaner would delete them.
-#  - token_dim: snapshot retention + orphan-file deletion (it has no such side files; it
-#    compacts itself in the same transaction as its writes, so no compaction optimizer).
-# Each table has its own S3 location, as the optimizers require.
-
+# # NOT relied on: compaction, retention and token_dim cleanup run in our own job (mode=compact).
+# # When on, Glue is a second, concurrent writer on the same tables; keep enable_table_optimizers off
+# # until the first load has created the tables (an optimizer needs an existing table).
 locals {
   optimizers = var.enable_table_optimizers ? 1 : 0
 }
@@ -1093,6 +1012,9 @@ resource "aws_glue_catalog_table_optimizer" "events_compaction" {
   depends_on = [aws_iam_role_policy_attachment.table_optimizer]
 }
 
+# # No orphan-file deletion for icp_swap_events: the quarantine artifacts live inside the table
+# # location (silver-quarantine/<generation>/) and are not referenced by Iceberg metadata, so the
+# # orphan cleaner would delete them.
 resource "aws_glue_catalog_table_optimizer" "events_retention" {
   count         = local.optimizers
   catalog_id    = var.aws_account_id

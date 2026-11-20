@@ -1,16 +1,4 @@
-"""Dataset A/B seam reconciliation tests, using real sanitized data.
-
-Fixtures below are genuine rows sliced from the real files involved in the
-Dataset A/B seam: Dataset-A canister file
-0071_3326b-qiaaa-aaaag-qnlja-cai.csv (its real chronological tail) and Dataset-B
-transactions_backfill_..._p001001.csv (the one real backfill file overlapping that
-tail by ~6.25h). Principal IDs/pool IDs/amounts are real on-chain public values;
-nothing sensitive is embedded. A_FIXTURE holds 10 real Dataset-A rows inside the
-real overlap window; B_FIXTURE holds the 10 real Dataset-B rows that genuinely
-duplicate them (content-identical, exact 0-second timestamp match) plus one real
-Dataset-B row in the same window with NO Dataset-A match,
-and one real Dataset-B row entirely outside the window (must survive untouched).
-"""
+"""Dataset A/B seam reconciliation tests, using real sanitized fixture rows."""
 
 from __future__ import annotations
 
@@ -91,8 +79,6 @@ def _parse_rows(csv_bytes: bytes) -> list[dict[str, str]]:
 
 
 def test_overlap_window_produces_exactly_the_expected_duplicate_count():
-    """All 10 A-window rows in the sanitized fixtures have exactly one B duplicate
-    each, at 0-second tolerance."""
     index = dataset_a_window_index(A_CSV, WINDOW_START, WINDOW_END, max_records=1000)
     assert len(index) == 10, index
 
@@ -100,7 +86,7 @@ def test_overlap_window_produces_exactly_the_expected_duplicate_count():
         B_CSV, index, WINDOW_START, WINDOW_END, tolerance_seconds=0, max_records=1000
     )
     assert report["dataset_b_total_rows"] == 12
-    assert report["dataset_b_window_rows"] == 11  # 10 dup + 1 unique-in-window
+    assert report["dataset_b_window_rows"] == 11
     assert report["dropped_duplicate_rows"] == 10
     assert report["kept_rows"] == 2
 
@@ -108,14 +94,12 @@ def test_overlap_window_produces_exactly_the_expected_duplicate_count():
     assert len(kept) == 2
     kept_hashes = {row["tx_hash"] for row in kept}
     assert kept_hashes == {
-        "xmiu5-jqaaa-aaaag-qbz7q-cai488819",  # unique-in-window, must survive
-        "mohjv-bqaaa-aaaag-qjyia-cai875344",  # out-of-window, must survive
+        "xmiu5-jqaaa-aaaag-qbz7q-cai488819",
+        "mohjv-bqaaa-aaaag-qjyia-cai875344",
     }
 
 
 def test_non_duplicate_rows_are_preserved_byte_for_byte():
-    """Rows that are kept must come through with every original column value
-    untouched - this is a surgical row-drop, not a reformat."""
     index = dataset_a_window_index(A_CSV, WINDOW_START, WINDOW_END, max_records=1000)
     cleaned, _report = clean_dataset_b_overlap(
         B_CSV, index, WINDOW_START, WINDOW_END, tolerance_seconds=0, max_records=1000
@@ -141,8 +125,6 @@ def test_each_dataset_a_row_consumed_at_most_once():
     even if (hypothetically) more than one B row shared that exact key."""
     index = dataset_a_window_index(A_CSV, WINDOW_START, WINDOW_END, max_records=1000)
     assert len(index) == 10
-    # Duplicate the whole B file's matching rows: two physically-identical rows per
-    # genuine A entry. Only one of each pair may be dropped per A entry.
     doubled_b = (
         B_HEADER
         + "\r\n"
@@ -153,12 +135,9 @@ def test_each_dataset_a_row_consumed_at_most_once():
         doubled_b, index, WINDOW_START, WINDOW_END, tolerance_seconds=0, max_records=1000
     )
     assert report["dropped_duplicate_rows"] == 10
-    # 20 doubled rows + 1 unique-in-window + 1 out-of-window = 22 total, minus 10 drops = 12.
     assert report["dataset_b_total_rows"] == 22
     assert report["kept_rows"] == 12
     kept = _parse_rows(cleaned)
-    # 10 surviving duplicate-content rows (the un-consumed twin of each pair) + the
-    # unique-in-window row + the out-of-window row.
     assert len(kept) == 12
 
 

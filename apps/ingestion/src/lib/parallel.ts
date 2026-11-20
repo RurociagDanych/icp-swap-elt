@@ -1,7 +1,9 @@
-// Runs `tasks` with at most `limit` in flight. On the first failure no further task is
-// dispatched; the call then waits for every in-flight task to settle and only then rejects
-// with that first error. Callers can therefore announce/release safely afterwards: nothing
-// is still writing. Later errors are reported via `onError`, never as unhandled rejections.
+/**
+ * Runs `tasks` with at most `limit` in flight. On the first failure no further task is
+ * dispatched; the call then waits for every in-flight task to settle and only then rejects
+ * with that first error. Callers can therefore announce/release safely afterwards: nothing
+ * is still writing. Later errors are reported via `onError`, never as unhandled rejections.
+ */
 export async function parallelLimit<T>(
   tasks: (() => Promise<T>)[],
   limit: number,

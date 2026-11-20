@@ -26,18 +26,15 @@ ATTRIBUTES = ("symbol", "name", "standard", "decimals")
 #   * within one object, per ledger and attribute, the LATEST observation that supplies the
 #     attribute wins; the object's as_of is the max timestamp of the ledger's observations;
 #   * against the stored row the decision is PER ATTRIBUTE, with the timestamp of the
-#     observation that supplied that attribute: strictly NEWER than the stored as_of
-#     replaces the stored value, OLDER may only FILL a NULL, EQUAL settles a differing value
-#     by the greater value (decimals numerically). as_of advances to the object's latest
-#     timestamp. So an older attribute can never overwrite a newer one, even when it comes in
-#     an object whose OTHER observations are newer;
+#     observation that supplied that attribute: strictly NEWER than the stored as_of replaces
+#     the stored value, OLDER may only FILL a NULL, EQUAL settles a differing value by the
+#     greater value (decimals numerically). as_of advances to the object's latest timestamp;
 #   * ``standard``: ``ICP`` wins over any other value irrespective of timestamps.
 # Accepted limitation: one as_of per ROW (not per attribute) cannot order A
 # (symbol/standard/decimals) against B (symbol/name) per attribute, so an attribute observed
-# AFTER its own stored value but BEFORE the row's as_of is refused (fill-only) and a stale
-# value can survive. Never the reverse (older over newer). Objects that supply every
-# attribute are fully order-independent. Exact per-attribute ordering needs one as_of column
-# per attribute (a schema change; see README "token_dim" known limitation).
+# AFTER its own stored value but BEFORE the row's as_of is refused (fill-only) and a stale value
+# can survive. Never the reverse (older over newer). Exact per-attribute ordering needs one as_of
+# column per attribute (a schema change; see README "token_dim" known limitation).
 AS_OF_COLUMN = "as_of"
 ICP_STANDARD = "ICP"
 MAX_REPORTED_CONFLICTS = 50
@@ -45,11 +42,11 @@ EXPECTED_COLUMNS = frozenset({"ledger_id", *ATTRIBUTES, AS_OF_COLUMN})
 DEFAULT_LIMITS = {
     # Normal path: data files selected by ``In(ledger_id, ...)`` for one object.
     "max_files": 16,
-    # Compaction: every commit adds a data file and Iceberg never merges them. Once the
-    # table holds more than ``compact_files`` files, the next commit rewrites the WHOLE
-    # (tiny) table into one file, so the steady-state file count is <= compact_files + 1
-    # however many commits happen. ``max_compact_files`` is the fail-closed ceiling on the
-    # files such a whole-table read/rewrite (and ``read_metadata``) may open.
+    # Compaction: every commit adds a data file and Iceberg never merges them. Once the table
+    # holds more than ``compact_files`` files, the next commit rewrites the WHOLE (tiny) table
+    # into one file, so the steady-state file count is <= compact_files + 1. ``max_compact_files``
+    # is the fail-closed ceiling on the files such a whole-table read/rewrite (and
+    # ``read_metadata``) may open.
     "compact_files": 8,
     "max_compact_files": 256,
     "max_rows": 50_000,
@@ -95,6 +92,7 @@ def _bounded_limits(limits):
 
 class MetadataError(RuntimeError):
     """Metadata is malformed, contradictory, or outside the bounded contract."""
+    pass
 
 
 _UNSET: Any = object()
@@ -110,12 +108,10 @@ def extract_metadata(
 ):
     """Extract only complete, valid-width CSV rows; retain a valid prefix on syntax errors.
 
-    ``max_bytes`` mirrors ``max_records``: the caller that already read the bytes under its
-    own bound (``silver_job._process_key`` derives this from ``SILVER_MAX_SOURCE_BYTES``) passes
-    that same bound through here, so exactly one number governs how many source bytes this
-    object may contain. The literal below is only the default for callers that don't pass one
-    (e.g. direct/test callers) — it must never silently diverge from the bound the bytes were
-    actually read under.
+    ``max_bytes`` mirrors ``max_records``: a caller that already read the bytes under its own
+    bound (``silver_job._process_key`` derives it from ``SILVER_MAX_SOURCE_BYTES``) passes the
+    same bound here, so one number governs the source size. The literal is only the default for
+    direct/test callers and must never diverge from the bound the bytes were read under.
     """
     if dataset not in {"A", "B"}:
         raise MetadataError("dataset must be A or B")
@@ -189,10 +185,9 @@ def extract_metadata(
                     else:
                         values[attr] = supplied[0] if supplied else None
                 if any(values[attr] is not None for attr in ATTRIBUTES):
-                    # Every observation is dated (the single as_of orders ALL attributes):
-                    # the very same parser (and validity rules) silver_contract uses for the
-                    # fact table's event_timestamp, once per row. Invalid/missing -> None
-                    # (an "undated" observation, oldest).
+                    # Every observation is dated (the single as_of orders ALL attributes) with the
+                    # same parser silver_contract uses for event_timestamp, once per row.
+                    # Invalid/missing -> None (an "undated" observation, oldest).
                     if event_time is _UNSET:
                         event_time = _event_timestamp(row, dataset)
                     timestamp = event_time
@@ -213,8 +208,7 @@ def extract_metadata(
 
 
 def _validate_schema(table):
-    """Accept ONLY the 6-column ``token_dim`` schema (``prepare_dim_target`` creates it
-    fresh; there is no in-place evolution). Anything else is refused fail-closed."""
+    """Accept ONLY the 6-column ``token_dim`` schema (created fresh, never evolved in place); refuse anything else."""
     schema = table.schema().as_arrow()
     if set(schema.names) != EXPECTED_COLUMNS or len(schema.names) != len(EXPECTED_COLUMNS):
         raise MetadataError(
@@ -239,20 +233,12 @@ def _validate_schema(table):
 
 
 def prepare_dim_target(catalog, identifier: str):
-    """Load the ``token_dim`` table, creating an empty exact-schema table if it does not
-    exist yet.
+    """Load ``token_dim``, creating an empty exact-schema table if it does not exist yet.
 
-    Mirrors ``silver_persistence.prepare_target`` for the fact table: on a fresh
-    deployment ``token_dim`` does not exist and nothing else creates it. An existing
-    table is only schema-validated: it is never evolved, rebuilt or truncated, and a table
-    with any other schema is refused.
-
-    Create-or-load: at ``backfill_max_concurrency`` > 1 against a fresh catalog,
-    multiple workers can all miss on ``load_table`` and race ``create_table``. Only
-    one wins; every loser must load the now-existing table instead of raising
-    ``TableAlreadyExistsError`` (catching that specific exception only — any other
-    catalog/IO error still propagates). The winner's and every loser's table is
-    schema-validated identically below either way.
+    Mirrors ``silver_persistence.prepare_target``. An existing table is only schema-validated,
+    never evolved, rebuilt or truncated. Create-or-load: at ``backfill_max_concurrency`` > 1
+    several workers can miss on ``load_table`` and race ``create_table``; every loser loads the
+    now-existing table (only ``TableAlreadyExistsError`` is caught) and is validated identically.
     """
     from pyiceberg.exceptions import NoSuchTableError, TableAlreadyExistsError
 
@@ -301,28 +287,25 @@ def _ts_key(timestamp):
 
 
 def _order_key(value):
-    """Total order inside one attribute: ints compare numerically (decimals), strings
-    lexicographically. The type tag only keeps a malformed mixed-type pair comparable."""
+    """Total order inside one attribute: ints numerically, strings lexicographically.
+
+    The type tag only keeps a malformed mixed-type pair comparable.
+    """
     return (isinstance(value, str), value)
 
 
 def _resolve_candidates(observations, max_ledgers=DEFAULT_LIMITS["max_ledgers"]):
     """Reduce one object's observations to one candidate per ledger/attribute.
 
-    Per ledger and attribute the LATEST observation that supplies the attribute wins (null
-    values never count; undated observations are oldest). Observations tied at that latest
-    timestamp that disagree are settled by the greater value (decimals numerically), and
-    ``standard`` ``ICP`` wins over any other value irrespective of timestamps. Nothing here
-    raises for a conflict.
+    Per ledger and attribute the LATEST observation that supplies it wins (nulls never count;
+    undated is oldest). Ties at that timestamp are settled by the greater value (decimals
+    numerically) and ``standard`` ``ICP`` wins irrespective of timestamps. Never raises for a
+    conflict.
 
-    Returns ``(candidates, as_of, conflicts, observed, attr_as_of)``:
-    ``candidates[ledger][attr]`` is a one-element set with the winner; ``as_of[ledger]`` is
-    the object's candidate as_of (the max timestamp of the ledger's observations, None if all
-    undated); ``conflicts[(ledger, attr)]`` holds the distinct values wherever the object
-    supplied more than one; ``observed[ledger][attr]`` holds every supplied value (for
-    type/range validation, so a losing malformed value still fails closed);
-    ``attr_as_of[(ledger, attr)]`` is the timestamp of the observation(s) that supplied the
-    winning value (what ``_merge_row`` compares against the stored as_of).
+    Returns ``(candidates, as_of, conflicts, observed, attr_as_of)``: the winners per
+    ledger/attribute, the object's as_of per ledger, the distinct values wherever more than one
+    was supplied, every supplied value (so a losing malformed value still fails closed), and the
+    timestamp of the winning observation (what ``_merge_row`` compares against the stored as_of).
     """
     ledger_ids = {item["ledger_id"] for item in observations}
     if any(not isinstance(ledger, str) or not ledger.strip() for ledger in ledger_ids):
@@ -356,10 +339,9 @@ def _resolve_candidates(observations, max_ledgers=DEFAULT_LIMITS["max_ledgers"])
         supplied = observed[ledger][attr]
         winner = max(tied, key=_order_key)
         if attr == "standard" and ICP_STANDARD in supplied:
-            # The native ICP ledger genuinely exposes both a legacy
-            # ICP-ledger and an ICRC-2 interface and different integrations record it
-            # differently (ryjl3-tyaaa-aaaaa-aaaba-cai); "ICP" is canonical and wins
-            # irrespective of timestamps. It is the only special case.
+            # The native ICP ledger exposes both a legacy ICP-ledger and an ICRC-2 interface and
+            # integrations record it differently (ryjl3-tyaaa-aaaaa-aaaba-cai); "ICP" is
+            # canonical and wins irrespective of timestamps. It is the only special case.
             winner = ICP_STANDARD
         candidates[ledger][attr] = {winner}
         if len(supplied) > 1:
@@ -382,17 +364,14 @@ def _merge_row(
 ) -> bool:
     """Merge one object's resolved candidates for ``ledger`` into ``row`` (mutated in place).
 
-    Returns whether the row changed. With ``stored`` = the row's ``as_of`` (None = oldest)
-    and ``incoming`` = the timestamp of the observation that supplied THIS attribute
-    (``attr_as_of[(ledger, attr)]``; falls back to the object's as_of):
+    Returns whether the row changed. ``incoming`` is the timestamp of the observation that
+    supplied THIS attribute (falls back to the object's as_of), ``stored`` the row's as_of:
       * a NULL stored attribute is always filled;
-      * incoming strictly NEWER than stored -> the attribute replaces the stored one;
-      * EQUAL -> a differing value is settled by the greater value (decimals numerically);
-      * OLDER -> never overwrites (even if the same object carries newer observations of
-        OTHER attributes);
-      * ``standard`` ``ICP`` always wins, whatever the timestamps.
-    ``as_of`` advances to the object's as_of when that is newer than stored.
-    Every differing pair that had to be settled is added to ``conflicts`` (never raises).
+      * incoming strictly NEWER -> replaces; EQUAL -> a differing value is settled by the greater;
+      * OLDER -> never overwrites, even if the same object carries newer observations of OTHER
+        attributes;
+      * ``standard`` ``ICP`` always wins.
+    ``as_of`` advances when the object's is newer. Every settled pair is added to ``conflicts``.
     """
     stored = _ts_key(row.get(AS_OF_COLUMN))
     object_incoming = _ts_key(candidate_as_of)
@@ -433,8 +412,7 @@ def _merge_row(
 
 
 def _conflict_report(conflicts, rows):
-    """``conflicts_resolved`` (exact) + the first MAX_REPORTED_CONFLICTS entries, sorted by
-    (ledger_id, attr) so the report is deterministic."""
+    """``conflicts_resolved`` (exact) + the first MAX_REPORTED_CONFLICTS entries, sorted for determinism."""
     entries = [
         {
             "ledger_id": ledger,
@@ -453,20 +431,16 @@ def _conflict_report(conflicts, rows):
 def apply_metadata(dim_table, observations, *, limits=None, deadline=None):
     """Merge one object's metadata into the current-value dimension (single ``as_of``).
 
-    Per ledger the object's candidates (latest supplying observation per attribute, see
-    ``_resolve_candidates``) are merged into the stored row by ``_merge_row``: a strictly
-    newer object replaces what it supplies, an equal/older one or a replay only fills NULLs
-    (equal timestamp: greater value wins), ``ICP`` always wins ``standard``. No attribute
-    conflict raises; each is reported as ``conflicts_resolved`` plus ``conflicts`` (capped at
-    ``MAX_REPORTED_CONFLICTS``; a replay re-reports the disagreements it sees but changes
-    nothing and creates no snapshot). A candidate ledger the dimension does not have yet gets
-    a new row. Any schema other than the 6-column one is refused (no in-place evolution).
+    Per ledger the resolved candidates are merged into the stored row by ``_merge_row``; no
+    attribute conflict raises, each is reported as ``conflicts_resolved`` plus ``conflicts``
+    (capped at ``MAX_REPORTED_CONFLICTS``). A replay changes nothing and creates no snapshot. A
+    ledger the dimension lacks gets a new row. Any schema other than the 6-column one is refused.
 
     File count is bounded: every commit adds a data file, so once the table holds more than
-    ``compact_files`` files the commit rewrites the whole table (every file deleted, one new
-    file) in the same guarded transaction. That path is fail-closed on the rows/bytes caps,
-    the ``max_compact_files`` ceiling and duplicate keys; a replay (nothing changed) still
-    commits nothing, compaction or not."""
+    ``compact_files`` files the commit rewrites the whole table in the same guarded transaction.
+    That path is fail-closed on the rows/bytes caps, the ``max_compact_files`` ceiling and
+    duplicate keys.
+    """
     if not observations:
         return {
             "snapshot_id": None,
@@ -571,9 +545,9 @@ def apply_metadata(dim_table, observations, *, limits=None, deadline=None):
         missing_attributes = {}
         conflict_sets = {key: set(values) for key, values in object_conflicts.items()}
         for ledger in ids:
-            # A candidate ledger absent from the dimension gets a brand-new row seeded
-            # from the supplied attributes instead of permanently blocking the whole batch
-            # (a newly listed token must not hard-fail every file that mentions it).
+            # A candidate ledger absent from the dimension gets a brand-new row seeded from the
+            # supplied attributes instead of permanently blocking the whole batch (a newly
+            # listed token must not hard-fail every file that mentions it).
             is_new_row = ledger not in by_id
             row = (
                 dict(by_id[ledger])
@@ -616,10 +590,10 @@ def apply_metadata(dim_table, observations, *, limits=None, deadline=None):
             raise MetadataError("dimension merged output row cap exceeded")
         overwrite_filter = predicate
         if compacting:
-            # Whole-table rewrite: untouched rows are carried over unchanged and the
-            # delete covers every file, so the table ends with exactly one data file.
-            # Still one transaction guarded by AssertRefSnapshotId below, so a concurrent
-            # writer makes it CommitFailed -> refresh -> re-merge, never a lost update.
+            # Whole-table rewrite: untouched rows are carried over unchanged and the delete
+            # covers every file, so the table ends with exactly one data file. Still one
+            # transaction guarded by AssertRefSnapshotId below, so a concurrent writer makes it
+            # CommitFailed -> refresh -> re-merge, never a lost update.
             output_rows = sorted(untouched + merged, key=lambda r: r["ledger_id"])
             if len(output_rows) > budget["max_rows"]:
                 raise MetadataError("dimension compaction output row cap exceeded")
@@ -667,8 +641,7 @@ def apply_metadata(dim_table, observations, *, limits=None, deadline=None):
             # AssertRefSnapshotId(main = the transaction's base snapshot). The transaction is
             # opened on ``dim_table`` WITHOUT a refresh since the planning scan above, so its
             # base snapshot is exactly ``snapshot_id`` (pinned by
-            # test_commit_is_fenced_on_the_planned_snapshot; pyiceberg is pinned in
-            # requirements.txt).
+            # test_commit_is_fenced_on_the_planned_snapshot).
             if dim_table.metadata.current_snapshot_id != snapshot_id:
                 raise MetadataError("token_dim changed between planning and staging")
             tx = dim_table.transaction()

@@ -1,28 +1,4 @@
-"""One-time historical reconciliation for the Dataset A / Dataset B seam.
-
-Scope: ONLY the ~6.25h real overlap window where Dataset A's canister export and
-Dataset B's REST backfill both contain the same real on-chain swaps under different
-``event_id``s (A keys on the canister's own event hash; B keys on ``tx_hash`` - a
-different hash for the SAME real event, by construction). The existing per-file
-idempotent-delete dedup (keyed on ``event_id``/``tx_hash``) therefore cannot catch
-these cross-dataset duplicates; this module content-matches them instead.
-
-Facts about the data this is built on:
-  - Dataset A's chronological end is 2026-06-07T06:37:26Z, in file
-    ``0071_3326b-qiaaa-aaaag-qnlja-cai.csv``; the window rows of Dataset A are compared
-    against that one object (``SEAM_A_KEY`` in ``silver_job.py``).
-  - ``transactions_backfill_..._p001001.csv`` (Dataset B) starts at
-    2026-06-07T00:22:33Z and so overlaps Dataset A's tail by ~6.25h.
-  - Overlapping rows match on (pool_id, both token ledger ids, both token amounts,
-    action) with an exact ``event_timestamp``; a small tolerance is still accepted
-    defensively (see ``DEFAULT_TOLERANCE_SECONDS``).
-  - When a match is found, the Dataset A row is kept (the canister-native source for the
-    deep-history dataset) and the Dataset B duplicate is dropped.
-
-This module is deliberately scoped to that one historical reload step. It is not a
-general, ongoing dedup mechanism: going forward only Dataset B exists, so there is
-no future recurring A/B overlap to reconcile.
-"""
+"""One-time historical reconciliation for the Dataset A / Dataset B seam."""
 
 from __future__ import annotations
 
@@ -33,6 +9,13 @@ from typing import Any
 
 from silver_contract import normalize_silver
 
+# Scope: ONLY the ~6.25 h overlap where Dataset A's canister export (ends 2026-06-07T06:37:26Z in
+# 0071_3326b-qiaaa-aaaag-qnlja-cai.csv, SEAM_A_KEY in silver_job.py) and Dataset B's REST backfill
+# (transactions_backfill_..._p001001.csv, starts 2026-06-07T00:22:33Z) hold the same on-chain swaps
+# under different event_ids (A keys on the canister's event hash, B on tx_hash), so the event_id
+# dedup cannot catch them. On a match the A row is kept and the B duplicate dropped. This is not
+# an ongoing dedup: going forward only Dataset B exists.
+#
 # Real matched A/B pairs carry exactly equal timestamps. A small margin is kept
 # defensively in case a re-run of this one-time reload meets a pair that isn't bit-exact.
 DEFAULT_TOLERANCE_SECONDS = 2
@@ -48,8 +31,7 @@ _CONTENT_FIELDS = (
 
 
 def _dummy_lineage(ordinal: int) -> dict[str, Any]:
-    """normalize_silver requires a lineage_ref/ingested_at to produce a record, but
-    neither is part of the cross-dataset content key - any valid placeholder works."""
+    """Placeholder lineage: normalize_silver requires one, but it is not part of the content key."""
     return {
         "lineage_ref": f"seam-reconciliation:{ordinal}",
         "ingested_at": "2026-01-01T00:00:00+00:00",
@@ -59,16 +41,15 @@ def _dummy_lineage(ordinal: int) -> dict[str, Any]:
 def _content_key(record: dict[str, Any] | None) -> tuple[Any, ...] | None:
     """Business-content identity for cross-dataset matching.
 
-    Deliberately excludes event_id, lineage_ref, ingested_at (occurrence/lineage,
-    not content) and amount_usd (derived differently per dataset - raw column on A,
-    tx_value/price-derived on B - so it is not a reliable identity field)."""
+    Excludes event_id, lineage_ref, ingested_at (occurrence, not content) and amount_usd
+    (derived differently per dataset, so not a reliable identity field).
+    """
     if record is None or any(record.get(f) is None for f in _CONTENT_FIELDS):
         return None
     return tuple(record[f] for f in _CONTENT_FIELDS)
 
 
 def _iter_normalized(csv_bytes: bytes, dataset: str, max_records: int):
-    """Yield (raw_row_dict, normalized_record_or_None) for each data row."""
     text = csv_bytes.decode("utf-8")
     reader = csv.DictReader(io.StringIO(text, newline=""), strict=True)
     for ordinal, raw in enumerate(reader, start=1):
@@ -90,10 +71,8 @@ def dataset_a_window_index(
 ) -> list[tuple[tuple[Any, ...], datetime]]:
     """Index Dataset-A rows within [window_start, window_end] by content key.
 
-    Returns a list of (content_key, event_timestamp) pairs - one per Dataset-A row
-    that normalizes cleanly and falls inside the window. Rows with any normalization
-    issue (so no reliable content key) are skipped: never used to justify dropping a
-    Dataset-B row, which keeps this reconciliation fail-safe toward over-counting.
+    Rows with any normalization issue (no reliable content key) are skipped: they never justify
+    dropping a Dataset-B row, which keeps the reconciliation fail-safe toward over-counting.
     """
     index: list[tuple[tuple[Any, ...], datetime]] = []
     for _row, record in _iter_normalized(csv_bytes, "A", max_records):
@@ -118,25 +97,17 @@ def clean_dataset_b_overlap(
     tolerance_seconds: float = DEFAULT_TOLERANCE_SECONDS,
     max_records: int,
 ) -> tuple[bytes, dict[str, Any]]:
-    """Drop Dataset-B rows in [window_start, window_end] that content-match a
-    Dataset-A row from ``a_window_index``; keep every other row byte-for-byte.
+    """Drop Dataset-B rows in the window that content-match a Dataset-A row; keep all others byte-for-byte.
 
-    Each Dataset-A entry is consumed at most once (so N real duplicates always
-    drop exactly N Dataset-B rows, never more), matched to the nearest unconsumed
-    Dataset-A timestamp within ``tolerance_seconds`` for the same content key.
-    Rows outside the window, or whose content key cannot be resolved cleanly, are
-    always kept untouched - this reconciliation only ever removes rows it can
-    positively match, never rows it merely suspects.
+    Each Dataset-A entry is consumed at most once (N real duplicates drop exactly N B rows),
+    matched to the nearest unconsumed A timestamp within ``tolerance_seconds``. Rows outside the
+    window or without a clean content key are always kept: only positive matches are removed.
 
-    A row whose cell count differs from the header is never re-shaped: it is written back
-    with exactly its original cells (extra cells kept, a short row NOT padded), so the CSV
-    boundary downstream quarantines it as ``column_count`` with every original value instead
-    of persisting a silently repaired row. ``max_records`` is the caller's configured row
-    bound (``SILVER_MAX_SOURCE_ROWS``), never a literal.
+    A row whose cell count differs from the header is never re-shaped (extra cells kept, short
+    row NOT padded), so the CSV boundary downstream quarantines it as ``column_count`` with its
+    original values. ``max_records`` is the caller's row bound (``SILVER_MAX_SOURCE_ROWS``).
 
-    Returns (cleaned_csv_bytes, report) where report carries counts for auditing:
-    dataset_b_total_rows, dataset_b_window_rows, dropped_duplicate_rows, kept_rows,
-    column_count_rows.
+    Returns (cleaned_csv_bytes, report) with counts for auditing.
     """
     pending: dict[tuple[Any, ...], list[datetime]] = {}
     for key, ts in a_window_index:

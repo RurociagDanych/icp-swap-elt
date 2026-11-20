@@ -34,7 +34,8 @@ Infrastructure:
 
 ## Conventions
 
-- Language: English for code, comments, docs and commit messages.
+- Language: English for code, docs and commit messages.
+- Public modules, classes and functions have docstrings. Comments explain why, not what. Tool directives such as # noqa are allowed.
 - TypeScript: strict, 2-space indentation, semicolons, single quotes, explicit types for exported helpers, `camelCase` for variables/functions, `PascalCase` for types/classes, short filenames like `csvSink.ts`, kebab-cased CLI flags (`--state-file`).
 - Python: follow the existing module style in `apps/transformation/src`; keep modules dependency-light and failure behavior fail-closed as documented in its README.
 - Formatters: `terraform fmt` for Terraform; no other formatter is configured.

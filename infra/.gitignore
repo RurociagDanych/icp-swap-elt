@@ -1,3 +1,2 @@
-# Backend configuration holds the state bucket name; only backend.hcl.example is tracked.
 backend.hcl
 *.backend.hcl

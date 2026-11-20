@@ -89,7 +89,7 @@ test('M9: resume that skips a completed canister still uses its persisted timest
   const state: IngestionState = defaultState();
   state.canisters.old = { lastTotal: 3, recentHashes: [], completed: true, maxTimestampSec: 5000 };
   await runFull(cfg, async () => reader(2, { ts: 2000n }), target, logger, state, ['old', 'new'], 'new');
-  assert.equal(sinks.length, 1); // old skipped
+  assert.equal(sinks.length, 1);
   assert.equal(state.canisterMaxTxTime, 5000 * 1000);
   assert.equal(state.canisterArchiveComplete, true);
 });

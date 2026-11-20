@@ -1,25 +1,20 @@
 """Bounded local/S3-compatible atomic flat-Silver publication for one CSV object.
 
-Deduplication model: ``event_id`` is the only dedup key and the Iceberg fact table
-itself is the only dedup state. There is no cumulative index, no shard, no root pointer.
+Deduplication model: ``event_id`` is the only dedup key and the Iceberg fact table itself is the
+only dedup state (no cumulative index, shard or root pointer). Each incoming record is looked up
+by ``event_id`` (pruned to its UTC event days) and compared by payload hash (``_payload_key``):
 
-For every incoming record the fact table is looked up by ``event_id`` (pruned to the incoming
-rows' UTC event days) and compared by payload hash (``_payload_key``):
+* absent                 -> plain append;
+* identical payload hash -> no-op (idempotent replay);
+* different payload hash -> conflict: the row with the SMALLER hash survives, so the outcome does
+  not depend on arrival order, and carries ``quality_status = 'conflict'``. This is a
+  deterministic tie-break, not a recency rule: when two fetches differ only in the derived
+  ``amount_usd`` the survivor is not necessarily the fresher one (README: "Precedence for
+  derived USD values").
 
-* absent                      -> plain append;
-* identical payload hash      -> no-op (idempotent replay; the stored row is left untouched);
-* different payload hash      -> conflict: the row with the SMALLER hash survives (so the
-  outcome does not depend on arrival order) and carries ``quality_status = 'conflict'``.
-  This is a deterministic tie-break, not a recency rule: when two fetches differ only in the
-  derived ``amount_usd`` the surviving value is not necessarily the fresher one (README:
-  "Precedence for derived USD values").
-
-Everything the object changes is published in ONE Iceberg transaction (delete of the exact
-rows being rewritten, if any, plus the append) fenced by the table snapshot, so two
-interleaved writers can never both insert the same new ``event_id``.
-
-Provenance is deliberately cheap: ``lineage_ref`` is ``s3://<bucket>/<key>#<ordinal>`` (the
-one-based logical CSV record ordinal); the raw CSVs in S3 remain the source of truth.
+Everything the object changes is published in ONE Iceberg transaction fenced by the table
+snapshot, so two interleaved writers can never both insert the same new ``event_id``.
+``lineage_ref`` is ``s3://<bucket>/<key>#<ordinal>``; the raw CSVs in S3 remain the source of truth.
 """
 
 from __future__ import annotations
@@ -111,12 +106,12 @@ QUARANTINE_DIR = "silver-quarantine"
 CONFLICT = "conflict"
 PARTITION_FIELD_NAME = "event_timestamp_year"
 
-#: File-level CSV defects. ``FATAL_FILE_ISSUES`` mean the object HAS rows that could not be
-#: read (a mid-file csv.Error after a valid prefix, undecodable bytes, an ambiguous header): it
-#: is refused before anything is published, because quarantining it and returning success
-#: would silently lose those rows. ``header_only`` / blank ``missing_header`` carry no rows at
-#: all (the REST incremental sink writes its header before it knows whether any row is new),
-#: so they stay a durable-quarantine success with a WARNING marker.
+#: File-level CSV defects. ``FATAL_FILE_ISSUES`` mean the object HAS rows that could not be read
+#: (a mid-file csv.Error after a valid prefix, undecodable bytes, an ambiguous header): it is
+#: refused before anything is published, because quarantining it and returning success would
+#: silently lose those rows. ``header_only`` / blank ``missing_header`` carry no rows at all (the
+#: REST incremental sink writes its header before it knows whether any row is new), so they stay
+#: a durable-quarantine success with a WARNING marker.
 FILE_ISSUE_CODES = frozenset(
     {
         "invalid_utf8",
@@ -133,9 +128,9 @@ FATAL_FILE_ISSUES = frozenset(
 
 #: Commit-conflict retry policy (``CommitFailedException`` = another writer committed first).
 #: Attempts default to ``DEFAULT_MAX_RETRIES`` (``SILVER_MAX_RETRIES``); between attempts an
-#: equal-jitter exponential backoff (``utils.retry.backoff_delay``) waits, and the sum of all
-#: waits is capped by ``_RETRY_MAX_TOTAL_SLEEP_SECONDS`` and by the publication deadline.
-#: Exhausting any bound raises (fail-closed; nothing is published, the source is replayable).
+#: equal-jitter exponential backoff waits, and the sum of all waits is capped by
+#: ``_RETRY_MAX_TOTAL_SLEEP_SECONDS`` and by the publication deadline. Exhausting any bound
+#: raises (fail-closed; nothing is published, the source is replayable).
 DEFAULT_MAX_RETRIES = 6
 _RETRY_BASE_SECONDS = 0.5
 _RETRY_MAX_SLEEP_SECONDS = 8.0
@@ -146,6 +141,7 @@ _jitter = random.random
 
 class IngestionError(RuntimeError):
     """Fail-closed bounded-ingestion error; caller must leave source replayable."""
+    pass
 
 
 def _limit(name: str, default: int) -> int:
@@ -292,11 +288,11 @@ def _validate_schema(table) -> None:
 def _target_schema_and_spec():
     """The fact table's Iceberg schema (fresh field ids) and its yearly partition spec.
 
-    Built once so ``create_table`` receives the spec and the table is born partitioned in
-    the SAME catalog commit (a separate ``update_spec`` commit could be lost to a crash and
-    leave an unpartitioned table). ``Catalog._convert_schema_if_needed`` is the conversion
-    PyIceberg 0.8.1 itself applies to a pyarrow schema in ``create_table`` (pinned in
-    requirements.txt); ``_validate_schema`` re-checks the result after creation.
+    Built once so ``create_table`` receives the spec and the table is born partitioned in the
+    SAME catalog commit (a separate ``update_spec`` commit could be lost to a crash and leave an
+    unpartitioned table). ``Catalog._convert_schema_if_needed`` is the conversion PyIceberg 0.8.1
+    itself applies in ``create_table`` (pinned in requirements.txt); ``_validate_schema``
+    re-checks the result.
     """
     from pyiceberg.catalog import Catalog
 
@@ -314,9 +310,11 @@ def _target_schema_and_spec():
 
 
 def _ensure_partitioned(catalog, identifier: str, table):
-    """Every partition field must be a transform of ``event_timestamp`` (the lookup prunes on
-    it). An UNPARTITIONED table is repaired in place only while it holds no snapshot (the
-    crash window of the old two-commit create); a populated unpartitioned table is refused."""
+    """Require every partition field to be a transform of ``event_timestamp`` (the lookup prunes on it).
+
+    An UNPARTITIONED table is repaired in place only while it holds no snapshot (the crash
+    window of the old two-commit create); a populated unpartitioned table is refused.
+    """
     fields = table.spec().fields
     if fields:
         names = {table.schema().find_column_name(field.source_id) for field in fields}
@@ -344,26 +342,23 @@ def _ensure_partitioned(catalog, identifier: str, table):
 def prepare_target(catalog, identifier: str, generation: str):
     """Load/create only an empty exact-schema target for the explicit generation.
 
-    Create-or-load: at ``backfill_max_concurrency`` > 1 against a fresh catalog,
-    multiple workers can all miss on ``load_table`` and race ``create_table``. Only
-    one wins the create (and adds the partition spec below); every loser must load
-    the now-existing table instead of raising ``TableAlreadyExistsError`` (catching
-    that specific exception only — any other catalog/IO error still propagates). A
-    table obtained this way runs through exactly the same generation and
-    schema-compatibility checks below as a table that already existed.
+    Create-or-load: at ``backfill_max_concurrency`` > 1 against a fresh catalog, several workers
+    can miss on ``load_table`` and race ``create_table``. Only one wins; every loser loads the
+    now-existing table (only ``TableAlreadyExistsError`` is caught) and runs through the same
+    checks below.
 
-    Generation guard (the cumulative lineage index is not used): a table without a
-    generation marker must be completely empty; a marked table must carry exactly this
-    generation, the current schema version, and at least one committed snapshot.
+    Generation guard: a table without a generation marker must be completely empty; a marked
+    table must carry exactly this generation, the current schema version, and at least one
+    committed snapshot.
     """
     try:
         table = catalog.load_table(identifier)
     except NoSuchTableError:
-        # Hidden yearly partitioning: year(event_timestamp), not a materialized column. A
-        # daily partition produces a severe small-files problem at this table's write
-        # cadence (one object per ingested CSV); yearly buckets keep the file count per
-        # partition low while still giving Athena/Trino partition pruning. Passed to
-        # create_table so schema and spec land in ONE commit.
+        # Hidden yearly partitioning: year(event_timestamp), not a materialized column. A daily
+        # partition produces a severe small-files problem at this table's write cadence (one
+        # object per ingested CSV); yearly buckets keep the file count per partition low while
+        # still giving Athena/Trino partition pruning. Passed to create_table so schema and spec
+        # land in ONE commit.
         schema, spec = _target_schema_and_spec()
         try:
             table = catalog.create_table(identifier, schema=schema, partition_spec=spec)
@@ -394,16 +389,18 @@ def prepare_target(catalog, identifier: str, generation: str):
     return _ensure_partitioned(catalog, identifier, table)
 
 
-#: Columns that never take part in the payload hash. ``lineage_ref`` / ``ingested_at`` are
-#: load provenance; ``quality_status`` is DERIVED (``ok`` | ``unresolved`` from the row's
-#: issues, or ``conflict`` once a second payload was seen for the event_id), so a stored
-#: survivor that carries ``conflict`` must hash exactly like the incoming payload it came from.
+#: Columns that never take part in the payload hash. ``lineage_ref`` / ``ingested_at`` are load
+#: provenance; ``quality_status`` is DERIVED (``ok`` | ``unresolved`` from the row's issues, or
+#: ``conflict`` once a second payload was seen), so a stored survivor that carries ``conflict``
+#: must hash exactly like the incoming payload it came from.
 _HASH_EXCLUDED = frozenset({"lineage_ref", "ingested_at", "quality_status"})
 
 
 def _payload_key(record: dict[str, Any]) -> str:
-    """SHA-256 of the canonical payload; identical for an incoming row and the same row
-    read back from Iceberg (Decimal(38,18) trailing zeros and tz-aware micros normalised)."""
+    """SHA-256 of the canonical payload; identical for an incoming row and the same row read back from Iceberg.
+
+    Decimal(38,18) trailing zeros and tz-aware micros are normalised.
+    """
 
     def encode(value):
         if isinstance(value, Decimal):
@@ -468,10 +465,10 @@ def _balanced_or(predicates: list):
 def _lookup_filter(event_ids: list[str], days: set[date | None]):
     """``event_id IN (...)`` restricted to the UTC event days of the rows being looked up.
 
-    Consecutive days are merged into one half-open range so a bulk object spanning months
-    is a handful of predicates, not one per day. Pruning by day is what keeps the lookup
-    bounded by the object's own time span instead of the whole table (known limit: an
-    ``event_id`` that later arrives with a timestamp on a DIFFERENT day is not found).
+    Consecutive days are merged into one half-open range so a bulk object spanning months is a
+    handful of predicates. Pruning by day keeps the lookup bounded by the object's own time span
+    (known limit: an ``event_id`` that later arrives with a timestamp on a DIFFERENT day is not
+    found).
     """
     predicates = []
     runs: list[list[date]] = []
@@ -489,10 +486,9 @@ def _lookup_filter(event_ids: list[str], days: set[date | None]):
 def _group_incoming(normalized: list[dict[str, Any]]):
     """Collapse one object to a single candidate per ``event_id``.
 
-    Returns ``(best, conflicted, days)`` where ``best[event_id] = (hash, record)`` is the
-    smallest-hash payload (first occurrence wins an exact tie, i.e. the lowest ordinal),
-    ``conflicted`` is the set of ids that carried more than one distinct payload inside
-    this object and ``days`` every UTC event day any candidate falls on.
+    Returns ``(best, conflicted, days)``: ``best[event_id] = (hash, record)`` is the smallest-hash
+    payload (the lowest ordinal wins an exact tie), ``conflicted`` the ids that carried more than
+    one distinct payload inside this object, ``days`` every UTC event day of any candidate.
     """
     best: dict[str, tuple[str, dict[str, Any]]] = {}
     conflicted: set[str] = set()
@@ -513,8 +509,7 @@ def _group_incoming(normalized: list[dict[str, Any]]):
 
 
 def _scan_batches(scan, tasks):
-    """Read exactly the already planned ``tasks`` of ``scan`` (one plan per scan: the files
-    whose caps were checked are the files that are read)."""
+    """Read exactly the already planned ``tasks`` (one plan per scan: the files whose caps were checked are the files read)."""
     from pyiceberg.io.pyarrow import ArrowScan
 
     return ArrowScan(
@@ -528,13 +523,11 @@ def _scan_batches(scan, tasks):
 
 
 def _plan_changes(table, best, conflicted, days, caps, check_deadline):
-    """Compare the object against the committed table; return what must be written.
+    """Compare the object against the committed table; return ``(appends, deletes, lookup)``.
 
-    Returns ``(appends, deletes, lookup)``: ``appends`` are the full rows to append (new events
-    and rewritten survivors), ``deletes`` the ``(event_id, day)`` of the exact stored rows those
-    rewrites replace and ``lookup`` the diagnostics of what the lookup saw
-    (``snapshot_id`` it ran against, ``files_selected``, ``rows_scanned`` = stored rows the
-    filtered scan returned, ``existing_found`` = incoming ids that were already stored).
+    ``appends`` are the full rows to append (new events and rewritten survivors), ``deletes`` the
+    ``(event_id, day)`` of the exact stored rows those rewrites replace, ``lookup`` the
+    diagnostics (``snapshot_id``, ``files_selected``, ``rows_scanned``, ``existing_found``).
     Empty ``appends`` means the object is an exact replay.
     """
     max_files, max_rows, max_bytes = caps
@@ -602,14 +595,12 @@ def _plan_changes(table, best, conflicted, days, caps, check_deadline):
 
 
 def _verify_single_rows(table, appended, caps, check_deadline):
-    """Read-your-write check after the commit: every event_id this object appended (new rows
-    and rewritten survivors) must now be stored exactly ONCE.
+    """Read-your-write check after the commit: every appended event_id must now be stored exactly ONCE.
 
-    Reads through a brand-new table handle (new catalog load, new FileIO, no state shared with
-    the handle that planned and committed), scans only the ``event_id`` column of the files the
-    ids' own day ranges select, and fails closed (never repairs, never deletes) when an id is
-    stored more than once or not at all. Bounded like the lookup: twice its file/row/byte caps
-    (the lookup's candidates plus the files this very commit wrote).
+    Reads through a brand-new table handle (new catalog load and FileIO, no shared state), scans
+    only the ``event_id`` column of the files the ids' day ranges select, and fails closed (never
+    repairs, never deletes) when an id is stored more than once or not at all. Bounded at twice
+    the lookup's file/row/byte caps (its candidates plus the files this commit wrote).
     """
     max_files, max_rows, max_bytes = (2 * cap for cap in caps)
     ids = sorted(appended)
@@ -655,12 +646,10 @@ def _verify_single_rows(table, appended, caps, check_deadline):
 class _StagedOutputs:
     """Record every file a transaction stages so an ABORTED attempt can remove them.
 
-    ``table.io`` is swapped for a shallow copy whose ``new_output`` records each location
-    (data files written by append/delete-rewrite, manifests, manifest lists). Only attempts
-    whose outcome is known to be "not committed" are cleaned: an exception raised before
-    ``commit_transaction`` or a ``CommitFailedException`` (the catalog rejected the commit).
-    Any other commit error leaves the files alone - the commit may have landed, and deleting
-    a referenced data file would corrupt the table.
+    ``table.io`` is swapped for a shallow copy whose ``new_output`` records each location. Only
+    attempts known to be "not committed" are cleaned: an exception before ``commit_transaction``
+    or a ``CommitFailedException``. Any other commit error leaves the files alone - the commit
+    may have landed, and deleting a referenced data file would corrupt the table.
     """
 
     def __init__(self, table):
@@ -710,9 +699,8 @@ def ingest_one(
 ) -> dict[str, Any]:
     """Normalize one bounded immutable object and atomically publish its new facts.
 
-    ``deadline`` is an absolute ``time.monotonic()`` instant chosen by the caller (derived
-    from the invocation start and the remaining Lambda time); the effective deadline is the
-    earlier of it and ``SILVER_DEADLINE_SECONDS`` from now.
+    ``deadline`` is an absolute ``time.monotonic()`` instant chosen by the caller; the effective
+    deadline is the earlier of it and ``SILVER_DEADLINE_SECONDS`` from now.
     """
     generation = _generation()
     max_source = _limit("SILVER_MAX_SOURCE_BYTES", 16 * 1024 * 1024)

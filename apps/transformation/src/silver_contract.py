@@ -19,14 +19,14 @@ from typing import Any
 
 CONTRACT_VERSION = "silver-flat-v1"
 #: Issue recorded when an amount carried more than 18 significant fractional digits and was
-#: quantized to the DECIMAL(38,18) column. Informational: the persisted value is resolved
-#: (the dropped digits are below the 1e-18 quantum), so it does not make a row 'unresolved'.
+#: quantized to the DECIMAL(38,18) column. Informational: the dropped digits are below the 1e-18
+#: quantum, so it does not make a row 'unresolved'.
 AMOUNT_ROUNDED = "amount_rounded"
 INFORMATIONAL_ISSUE_CODES = frozenset({AMOUNT_ROUNDED})
 _AMOUNT_QUANTUM = Decimal(1).scaleb(-18)
-#: Explicit arithmetic context for every amount computation: wide enough that a product of
-#: two DECIMAL(38,18)-sized inputs is exact (the default context would silently round to 28
-#: significant digits), HALF_EVEN, and trapping instead of silently producing NaN/Infinity.
+#: Explicit arithmetic context for every amount computation: wide enough that a product of two
+#: DECIMAL(38,18)-sized inputs is exact (the default context would round to 28 significant
+#: digits), HALF_EVEN, and trapping instead of silently producing NaN/Infinity.
 _AMOUNT_CONTEXT = Context(
     prec=100,
     rounding=ROUND_HALF_EVEN,
@@ -46,6 +46,7 @@ EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 class IdentityError(ValueError):
     """Raised when source fields cannot provide a semantic event identity."""
+    pass
 
 
 def _first(row: dict[str, Any], *names: str) -> Any:
@@ -193,11 +194,9 @@ def _bounded_amount(
 ) -> Decimal:
     """Nonnegative DECIMAL(38,18) magnitude: at most 20 integral digits, scale <= 18.
 
-    A value with more than 18 significant fractional digits (the canister feed serialises
-    float64, so small magnitudes print e.g. 19-23 fractional digits) is QUANTIZED to 18
-    places with ``ROUND_HALF_EVEN`` under the explicit ``_AMOUNT_CONTEXT`` (never the ambient
-    thread context) and an ``amount_rounded`` issue is appended to ``issues``; the dropped
-    digits are below the 1e-18 quantum of the column. Integral overflow is still rejected.
+    More than 18 fractional digits (the canister feed serialises float64) are QUANTIZED to 18
+    places with ROUND_HALF_EVEN under ``_AMOUNT_CONTEXT`` (never the ambient thread context) and
+    an ``amount_rounded`` issue is appended; integral overflow is still rejected.
     """
     number = _decimal(value)
     if number < 0:
@@ -294,14 +293,12 @@ def _raw_slot(
 def _amount_usd(
     row: dict[str, Any], dataset: str, token0_amount: Decimal | None
 ) -> tuple[Decimal | None, list[dict[str, str]]]:
-    """Derive the persisted USD magnitude of the event.
+    """Derive the persisted USD magnitude of the event (always nonnegative, never signed).
 
-    Dataset A carries it directly as a raw ``amount_usd`` column. Dataset B has no such
-    column: prefer its raw ``token0_tx_value``/``token1_tx_value`` (whichever is present),
-    else fall back to ``token0_price * token0_amount``. Always a nonnegative magnitude,
-    never signed — missing/unavailable input is left ``None`` without an issue (legitimate
-    for non-swap actions and gaps in either feed); a *present but unparsable* input is an
-    issue so it is visible in ``quality_status`` rather than silently dropped.
+    Dataset A carries it as ``amount_usd``. Dataset B has no such column: prefer its raw
+    ``token0_tx_value``/``token1_tx_value``, else ``token0_price * token0_amount``. Missing input
+    is left ``None`` without an issue (legitimate for non-swap actions and feed gaps); a present
+    but unparsable input is an issue so it shows in ``quality_status`` instead of vanishing.
     """
     issues: list[dict[str, str]] = []
     source = (

@@ -120,7 +120,7 @@ test('saveState replaces the file atomically (temp file + rename, no leftovers)'
   const next = defaultState();
   next.latestStorageId = 'x';
   saveState(file, next);
-  assert.notEqual(fs.statSync(file).ino, inoBefore); // renamed over, not truncated in place
+  assert.notEqual(fs.statSync(file).ino, inoBefore);
   assert.deepEqual(fs.readdirSync(dir), ['state.json']);
   assert.equal(loadState(file).latestStorageId, 'x');
 });

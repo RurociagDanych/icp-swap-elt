@@ -4,10 +4,12 @@ export type RunStatus = 'succeeded' | 'failed';
 
 export type FinalizeFn = (status: RunStatus, opts?: { announceTimeoutMs?: number }) => Promise<void>;
 
-// Shutdown for a run: announce what was written, THEN release the lock (releasing first
-// would let the next run start while the announcement is still in flight). Idempotent, so
-// the normal exit path and a SIGTERM racing it share one execution. A failed announcement
-// never masks the run's own error; for a successful run it is thrown after the lock is released.
+/**
+ * Shutdown for a run: announce what was written, THEN release the lock (releasing first
+ * would let the next run start while the announcement is still in flight). Idempotent, so
+ * the normal exit path and a SIGTERM racing it share one execution. A failed announcement
+ * never masks the run's own error; for a successful run it is thrown after the lock is released.
+ */
 export function createFinalizer(deps: {
   logger: Logger;
   announce: (status: RunStatus) => Promise<void>;
@@ -48,8 +50,10 @@ export function createFinalizer(deps: {
   };
 }
 
-// SIGTERM/SIGINT: Fargate gives a short grace period before SIGKILL, so the announcement is
-// bounded by announceTimeoutMs; the lock is released and the process exits either way.
+/**
+ * SIGTERM/SIGINT: Fargate gives a short grace period before SIGKILL, so the announcement is
+ * bounded by announceTimeoutMs; the lock is released and the process exits either way.
+ */
 export function createShutdownHandler(deps: {
   logger: Logger;
   finalize: FinalizeFn;

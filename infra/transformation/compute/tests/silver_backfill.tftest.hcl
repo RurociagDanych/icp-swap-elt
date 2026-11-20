@@ -1,8 +1,5 @@
-# Offline checks (mock provider: no AWS credentials, no API calls) for the split transformation
-# functions. Run from this root: `terraform init -backend=false && terraform test`.
-# `command = apply` is used so that computed attributes (function ARNs) are known and the
-# state-machine definitions can be inspected; with a mock provider nothing leaves the machine.
-
+# # `command = apply` is used so computed attributes (function ARNs) are known and the state-machine
+# # definitions can be inspected; with a mock provider nothing leaves the machine.
 mock_provider "aws" {
   mock_data "aws_partition" {
     defaults = {
@@ -66,20 +63,17 @@ mock_provider "aws" {
 }
 
 variables {
-  aws_account_id        = "123456789012"
-  raw_bucket_name       = "raw-bucket"
-  processed_bucket_name = "processed-bucket"
-  glue_database_name    = "icp_swap_elt"
-  # Required inputs without module defaults.
+  aws_account_id           = "123456789012"
+  raw_bucket_name          = "raw-bucket"
+  processed_bucket_name    = "processed-bucket"
+  glue_database_name       = "icp_swap_elt"
   silver_target_generation = "g20261101"
   image_tag                = "test-1"
-  # Pinned to the module defaults so the assertions below do not depend on the (gitignored,
-  # auto-loaded) terraform.tfvars of whoever runs the test.
+  # # Pinned to the module defaults so the assertions below do not depend on the (gitignored,
+  # # auto-loaded) terraform.tfvars of whoever runs the test.
   silver_backfill_max_selected_files = 64
   silver_backfill_max_selected_rows  = 1000000
   silver_backfill_max_selected_bytes = 536870912
-  # No schedules: the mock provider does not generate valid state-machine/Lambda ARNs for the
-  # scheduler targets, and these checks are about the functions and state machines.
 }
 
 run "backfill_lambda_is_large_and_incremental_lambda_stays_small" {

@@ -1,5 +1,3 @@
-# Offline plan-level checks (mock provider, no credentials) for the processed-bucket lifecycle.
-
 mock_provider "aws" {
   mock_data "aws_caller_identity" {
     defaults = {

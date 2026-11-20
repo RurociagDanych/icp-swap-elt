@@ -42,7 +42,6 @@ class SyntheticBody(io.BytesIO):
 
 
 class SyntheticS3:
-    """Test-only local object boundary; bytes are labelled synthetic in the fixture."""
 
     def __init__(self, objects):
         self.objects = objects
@@ -54,7 +53,6 @@ class SyntheticS3:
 
 
 class LocalOnlyFileIO:
-    """Guard schemes and resolved paths before delegating to real local PyIceberg IO."""
 
     def __init__(self, delegate, allowed_root):
         self.delegate = delegate
@@ -97,7 +95,6 @@ class LocalOnlyFileIO:
 
 
 class TracingLocalHandler(pafs.FileSystemHandler):
-    """Guard and count real Arrow filesystem data opens in the local fixture."""
 
     def __init__(self, allowed_root):
         self.allowed_root = Path(allowed_root).resolve()
@@ -475,7 +472,6 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
             self.silver.handler({"mode": "backfill_file", "key": key})
             facts = {row["action"]: row for row in self._facts()}
 
-        # the semantic issue marks ONLY its own row; raw lexemes stay in the raw CSV
         self.assertEqual("unresolved", facts["unknown"]["quality_status"])
         self.assertEqual("ok", facts["claim"]["quality_status"])
         self.assertEqual(
@@ -496,7 +492,6 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
             self.silver.handler({"mode": "backfill_file", "key": keys[1]})
             after = self._facts()[0]
         self.assertEqual(before["ingested_at"], after["ingested_at"])
-        # an identical payload from another object is a no-op: the first provenance stays
         self.assertEqual(before["lineage_ref"], after["lineage_ref"])
         self.assertEqual(snapshot, self._snapshot())
 
@@ -1080,7 +1075,6 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
             {f"s3://synthetic-raw/{key}#1", f"s3://synthetic-raw/{key}#2"},
             {fact["lineage_ref"] for fact in facts},
         )
-        # the two rows differ ONLY in amount_usd, which is part of the identity
         self.assertEqual(
             {Decimal("10"), Decimal("11")}, {fact["amount_usd"] for fact in facts}
         )
@@ -1232,12 +1226,10 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
             result = self.silver.handler({"mode": "backfill_file", "key": key})
         fact = self._facts()[0]
         self.assertEqual(1, result["rows_written"])
-        # four numerically equivalent lexemes are ONE payload: no conflict, first ordinal
         self.assertEqual("ok", fact["quality_status"])
         self.assertEqual(
             "s3://synthetic-raw/synthetic/numeric-equivalence.csv#1", fact["lineage_ref"]
         )
-        # the same numbers stored in another object are an exact replay (round trip stable)
         snapshot = self._snapshot()
         same = self._ingest(
             "synthetic/numeric-again.csv", self._b_object(rows[1], rows[3])
@@ -1260,7 +1252,6 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
         self.assertEqual("conflict", conflicted["quality_status"])
 
     def test_registered_a_b_complementary_reversed_slots_fresh_readback(self):
-        """Metadata is durably merged from both slots before unchanged fact writes."""
         from pyiceberg.schema import Schema
         from pyiceberg.types import IntegerType, NestedField, StringType
 
@@ -1494,8 +1485,6 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
         equal = apply_metadata(after, observations)
         self.assertEqual([], equal["changed_ledgers"])
         self.assertEqual(snapshot, after.current_snapshot().snapshot_id)
-        # An undated differing
-        # symbol ties with the stored undated one and the greater value wins; nothing raises.
         conflict = [dict(observations[0], symbol="CONFLICT")]
         resolved = apply_metadata(after, conflict)
         self.assertEqual(["ledger-a"], resolved["changed_ledgers"])
@@ -1504,7 +1493,7 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
         winner = self.catalog.load_table("synthetic.token_dim")
         self.assertNotEqual(snapshot, winner.current_snapshot().snapshot_id)
         winner_snapshot = winner.current_snapshot().snapshot_id
-        replay = apply_metadata(winner, observations)  # the lesser value cannot revert it
+        replay = apply_metadata(winner, observations)
         self.assertEqual([], replay["changed_ledgers"])
         self.assertEqual(
             winner_snapshot,
@@ -1711,8 +1700,8 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
             ),
         )
         dim = self.catalog.load_table("synthetic.token_dim")
-        icp_ledger = "ryjl3-tyaaa-aaaaa-aaaba-cai"  # the real native ICP ledger canister
-        unrelated_ledger = "ly36x-wiaaa-aaaai-aqj7q-cai"  # a real pool token, unrelated conflict
+        icp_ledger = "ryjl3-tyaaa-aaaaa-aaaba-cai"
+        unrelated_ledger = "ly36x-wiaaa-aaaai-aqj7q-cai"
         dim.append(
             pa.Table.from_pylist(
                 [
@@ -1720,7 +1709,7 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
                         "ledger_id": icp_ledger,
                         "symbol": "ICP",
                         "name": None,
-                        "standard": "ICRC2",  # existing row recorded via the ICRC-2 interface
+                        "standard": "ICRC2",
                         "decimals": 8,
                     },
                     {
@@ -1746,7 +1735,6 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
                 "source": source,
             }
 
-        # Direction 1: existing="ICRC2", new candidate="ICP" -> row is corrected to "ICP".
         result = apply_metadata(dim, [observation(icp_ledger, "ICP")])
         self.assertIn(icp_ledger, result["changed_ledgers"])
         after = self.catalog.load_table("synthetic.token_dim")
@@ -1757,8 +1745,6 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
         )
         self.assertEqual("ICP", row["standard"])
 
-        # Direction 2: existing="ICP" (just corrected above), new candidate="ICRC2"
-        # -> stays "ICP", true no-op (not in changed_ledgers).
         result2 = apply_metadata(after, [observation(icp_ledger, "ICRC2")])
         self.assertNotIn(icp_ledger, result2["changed_ledgers"])
         still = self.catalog.load_table("synthetic.token_dim")
@@ -1769,8 +1755,6 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
         )
         self.assertEqual("ICP", row2["standard"])
 
-        # An unrelated conflict (neither side ICP): the observation is undated and the stored as_of is NULL -> a tie, the greater value
-        # wins, nothing raises, and the resolved conflict is reported.
         before_snapshot = still.current_snapshot().snapshot_id
         resolved = apply_metadata(still, [observation(unrelated_ledger, "ICRC2")])
         self.assertEqual([unrelated_ledger], resolved["changed_ledgers"])
@@ -2182,7 +2166,6 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
         attempts = token_dimension.DEFAULT_LIMITS["max_attempts"]
         self.assertEqual(attempts, target_admissions)
         self.assertEqual(attempts, len(stale))
-        # M6: a jittered exponential backoff between attempts, none after the last one
         self.assertEqual(attempts - 1, len(sleeps))
         # equal jitter: step k waits in [c_k/2, c_k] and c_{k+1} = 2*c_k, so never shrinks
         self.assertTrue(all(b >= a for a, b in zip(sleeps, sleeps[1:])), sleeps)
@@ -3384,7 +3367,6 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
         self.assertEqual(20, len(result["tokens"]))
         self.assertEqual([], self.external_attempts)
 
-    # --- seam reconciliation wiring, token_dim creation ---
 
     def test_seam_overlap_b_side_object_is_reconciled_and_nonseam_object_untouched(self):
         """seam_reconciliation must actually be wired into the
@@ -3423,13 +3405,10 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
                 .to_arrow()
                 .to_pylist()
             )
-        # 10 real duplicate rows dropped, 2 real survivors (unique-in-window +
-        # out-of-window) kept and actually written as facts.
         self.assertIn("seam_reconciliation", seam_result)
         self.assertEqual(10, seam_result["seam_reconciliation"]["dropped_duplicate_rows"])
         self.assertEqual(12, seam_result["seam_reconciliation"]["dataset_b_total_rows"])
         self.assertEqual(2, seam_result["rows_written"])
-        # The non-seam object must never see the reconciliation key at all.
         self.assertNotIn("seam_reconciliation", non_seam_result)
         self.assertEqual(1, non_seam_result["rows_written"])
         self.assertEqual(3, len(rows))
@@ -3448,7 +3427,6 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
             result = self.silver.handler({"mode": "backfill_file", "key": lookalike_key})
         self.assertNotIn("seam_reconciliation", result)
         self.assertEqual(1, result["rows_written"])
-        # Only the one requested object was ever read — no companion A-side fetch.
         self.assertEqual([("synthetic-raw", lookalike_key)], s3.get_calls)
 
     _DIM_METADATA_HEADER = (
@@ -3477,11 +3455,11 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
         self.assertEqual(2, dim["created_ledgers"])
         self.assertEqual(0, dim["conflicts_resolved"])
         self.assertNotIn("readback", dim)
-        json.dumps(result)  # JSON-serialisable Lambda response
+        json.dumps(result)
 
     def test_token_dim_is_created_on_demand_when_table_absent(self):
         """A fresh deployment has no token_dim table anywhere (Terraform does not create
-        it) — the first backfill_file invoke that observes
+        it) - the first backfill_file invoke that observes
         token metadata must fail-open into creating it (mirroring prepare_target
         for the fact table), not fail-closed with MetadataError."""
         with self.assertRaises(Exception):
@@ -3498,7 +3476,7 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
         from token_dimension import _validate_schema
 
         dim = self.catalog.load_table("synthetic.token_dim")
-        _validate_schema(dim)  # exact {ledger_id,symbol,name,standard,decimals} contract
+        _validate_schema(dim)
         rows = {r["ledger_id"]: r for r in dim.scan().to_arrow().to_pylist()}
         self.assertEqual("NEW", rows["ledger-new"]["symbol"])
         self.assertEqual("TWO", rows["ledger-two"]["symbol"])
@@ -3507,7 +3485,7 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
 
     def test_token_dim_is_left_alone_when_table_already_exists(self):
         """An existing token_dim table must never be rebuilt or
-        truncated by the on-demand creation path — only loaded and filled."""
+        truncated by the on-demand creation path - only loaded and filled."""
         from pyiceberg.schema import Schema
         from pyiceberg.types import IntegerType, NestedField, StringType
 
@@ -3596,8 +3574,6 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
         ):
             self.silver.handler({"mode": "backfill_file", "key": key})
         self.assertEqual(5242880, captured["max_bytes"])
-        # Prove the wiring is live, not a coincidental equal default: a different
-        # configured bound must show up unchanged too.
         captured.clear()
         with (
             patch.object(token_dimension, "extract_metadata", side_effect=spy),
@@ -3711,9 +3687,6 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
         ):
             prepare_dim_target(self.catalog, "synthetic.outage_dim")
 
-    # ------------------------------------------------------------------
-    # event_id dedup against the fact table (no cumulative index)
-    # ------------------------------------------------------------------
     @staticmethod
     def _b_row(tx_hash, out1="1", ts="1793363500000", in0="0", out0="0"):
         return (
@@ -3742,8 +3715,6 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
         from silver_persistence import _payload_key
 
         rows = [
-            # trailing zeros, exponent lexeme, zero, huge-scale decimals, null timestamp,
-            # sub-second timestamp precision
             self._b_row("rt-zeros", out1="1.2300", in0="10e-1", out0="0.000"),
             self._b_row("rt-big", out1="123456789012345678.123456789012345678"),
             self._b_row("rt-null-ts", ts=""),
@@ -3826,7 +3797,6 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
         self.assertEqual({"ok"}, {row["quality_status"] for row in facts.values()})
         self.assertEqual("test-generation-1", table.properties["silver.target.generation"])
         self.assertEqual("silver-flat-v1", table.properties["silver.schema.version"])
-        # no cumulative index of any kind: no root/version properties, no shard files
         self.assertNotIn("silver.lineage.root", table.properties)
         self.assertNotIn("silver.index.version", table.properties)
         self.assertEqual(
@@ -3846,7 +3816,6 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
             self.assertEqual(0, replay["rows_written"])
             self.assertTrue(replay["replayed"])
         self.assertEqual(snapshot, self._snapshot())
-        # the committed row is untouched: original lineage_ref and ingested_at survive
         self.assertEqual(before, self._facts())
         self.assertTrue(before[0]["lineage_ref"].endswith("synthetic/replay-1.csv#1"))
 
@@ -3857,7 +3826,7 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
         rows = (
             self._b_row("in-file", out1="7"),
             self._b_row("in-file", out1="5"),
-            self._b_row("in-file", out1="7"),  # exact duplicate of the first row
+            self._b_row("in-file", out1="7"),
             self._b_row("other", out1="9"),
         )
         records = self._records(*rows[:2])
@@ -3877,7 +3846,6 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
         )
         other = next(r for eid, r in facts.items() if eid != survivor["event_id"])
         self.assertEqual("ok", other["quality_status"])
-        # replay of the whole conflicted object is a no-op
         snapshot = self._snapshot()
         replay = self._ingest("synthetic/in-file.csv", self._b_object(*rows))
         self.assertEqual(0, replay["rows_written"])
@@ -3900,7 +3868,7 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
                 self._ingest(keys[row], self._b_object(row))
             survivors[table_name] = self._facts_of(table_name)
             snapshot = self._snapshot(table_name)
-            for row in order:  # conflict row replay (winner AND loser) is a no-op
+            for row in order:
                 replay = self._ingest(keys[row], self._b_object(row))
                 self.assertEqual(0, replay["rows_written"], (table_name, row))
             self.assertEqual(snapshot, self._snapshot(table_name))
@@ -3924,7 +3892,6 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
         records = self._records(*rows)
         winner = rows[records.index(min(records, key=_payload_key))]
         loser = rows[1 - records.index(min(records, key=_payload_key))]
-        # existing row == the eventual survivor; the later object shows BOTH payloads
         first = self._ingest("synthetic/mark-1.csv", self._b_object(winner))
         before = self._facts()[0]
         self._ingest("synthetic/mark-2.csv", self._b_object(loser, winner))
@@ -3932,7 +3899,6 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
         self.assertEqual(1, first["rows_written"])
         self.assertEqual(1, len(after))
         self.assertEqual("conflict", after[0]["quality_status"])
-        # existing row WON: its ingested_at and lineage_ref are kept
         self.assertEqual(before["ingested_at"], after[0]["ingested_at"])
         self.assertEqual(before["lineage_ref"], after[0]["lineage_ref"])
 
@@ -3942,7 +3908,6 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
         rows = [self._b_row("three", out1=str(n)) for n in (1, 2, 3)]
         records = self._records(*rows)
         ordered = sorted(range(3), key=lambda i: _payload_key(records[i]))
-        # commit the two HIGHER hashes first, then the lowest: it must take over
         self._ingest("synthetic/three-a.csv", self._b_object(rows[ordered[2]]))
         self._ingest("synthetic/three-b.csv", self._b_object(rows[ordered[1]]))
         self.assertEqual(rows[ordered[1]][-1], self._amount_digit(self._facts()[0]))
@@ -4005,7 +3970,6 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
     def test_interleaved_writers_same_new_event_id_leave_exactly_one_row(self):
         from silver_persistence import _payload_key
 
-        # different payloads: fence must fail one writer; its retry re-scans and conflicts
         rows = [self._b_row("race-new", out1="2"), self._b_row("race-new", out1="5")]
         records = self._records(*rows)
         objects = {
@@ -4015,7 +3979,7 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
         results, seen, bases = self._race(objects)
         facts = self._facts()
         self.assertEqual(2, len(results))
-        self.assertEqual([None, None], bases)  # both planned against the EMPTY table
+        self.assertEqual([None, None], bases)
         self.assertEqual(1, seen.count("CommitFailedException"))
         # winner (+ the retry's rewrite only when the fenced payload outranks the winner's)
         self.assertIn(seen.count("committed"), (1, 2))
@@ -4064,7 +4028,6 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
                     self._ingest("synthetic/cap-update.csv", update)
                 self.assertEqual(snapshot, self._snapshot())
                 self.assertEqual(before, self._facts())
-        # at the exact boundary the same object succeeds
         with patch.dict(
             os.environ,
             {
@@ -4104,13 +4067,11 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
     ):
         from silver_persistence import IngestionError, prepare_target
 
-        # empty, never-initialised table is accepted
         prepare_target(self.catalog, "synthetic.silver", "test-generation-1")
         self._ingest("synthetic/guard.csv", self._b_object(self._b_row("guard")))
         table = self.catalog.load_table("synthetic.silver")
         self.assertNotIn("silver.lineage.root", table.properties)
         self.assertNotIn("silver.index.version", table.properties)
-        # an initialised generation is accepted WITHOUT root/index properties
         prepare_target(self.catalog, "synthetic.silver", "test-generation-1")
         with self.assertRaisesRegex(IngestionError, "target generation mismatch"):
             prepare_target(self.catalog, "synthetic.silver", "other-generation")
@@ -4122,7 +4083,6 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
     def test_prepare_target_refuses_nonempty_unindexed_and_legacy_index_tables(self):
         from silver_persistence import IngestionError, prepare_target
 
-        # rows present but no generation marker (e.g. a table written by something else)
         table = self.catalog.create_table(
             "synthetic.foreign_rows", schema=self.catalog.load_table("synthetic.silver").schema()
         )
@@ -4134,7 +4094,6 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(IngestionError, "nonempty unindexed"):
             prepare_target(self.catalog, "synthetic.foreign_rows", "test-generation-1")
-        # initialised generation but no committed snapshot
         empty = self.catalog.create_table(
             "synthetic.gen_no_snapshot", schema=table.schema()
         )
@@ -4147,7 +4106,6 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(IngestionError, "no committed snapshot"):
             prepare_target(self.catalog, "synthetic.gen_no_snapshot", "test-generation-1")
-        # a table still carrying the retired lineage index properties is refused loudly
         legacy = self.catalog.create_table("synthetic.legacy_index", schema=table.schema())
         with legacy.transaction() as tx:
             tx.set_properties(
@@ -4187,7 +4145,6 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
         self.assertEqual(12, control["rows_written"])
         self.assertEqual(22, len(self._facts_of("silver_control")))
 
-        # The real seam path.
         self.silver.TABLE_NAME = "silver"
         s3 = SyntheticS3(objects)
         with patch.object(self.silver, "_s3", s3):
@@ -4206,7 +4163,7 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
         self.assertEqual(10, seam["seam_reconciliation"]["dropped_duplicate_rows"])
         self.assertEqual(12, seam["seam_reconciliation"]["dataset_b_total_rows"])
         self.assertEqual(2, seam["rows_written"])
-        self.assertEqual(12, len(facts))  # 10 A + the 2 surviving B rows
+        self.assertEqual(12, len(facts))
         by_source = {}
         for fact in facts:
             by_source.setdefault(
@@ -4215,14 +4172,11 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
         self.assertEqual(10, len(by_source[self.silver.SEAM_A_KEY.rsplit("/", 1)[-1]]))
         survivors = by_source[self.silver.SEAM_B_KEY.rsplit("/", 1)[-1]]
         self.assertEqual(2, len(survivors))
-        # the survivors are exactly the in-window row with no A match and the out-of-window row
         self.assertEqual(
             {1780814246, 1780858942},
             {int(row["event_timestamp"].timestamp()) for row in survivors},
         )
-        # nothing was marked conflict: the overlap was removed, not merged
         self.assertEqual({"ok"}, {row["quality_status"] for row in facts})
-        # replay of the (reconciled) seam B object is a no-op
         self.assertEqual(0, replay["rows_written"])
         self.assertTrue(replay["replayed"])
         self.assertEqual(snapshot, self._snapshot())
@@ -4244,7 +4198,7 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
         self.assertEqual(snapshot, self._snapshot())
         update = self._ingest("synthetic/days-2.csv", self._b_object(*second))
         facts = self._facts()
-        self.assertEqual(4, update["rows_written"])  # every stored row found and rewritten
+        self.assertEqual(4, update["rows_written"])
         self.assertEqual(4, len(facts), "no stored row was missed, so none was duplicated")
         self.assertEqual({"conflict"}, {row["quality_status"] for row in facts})
 
@@ -4265,12 +4219,8 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
         self.assertEqual(1, len({row["event_id"] for row in facts}))
 
 
-    # ------------------------------------------------------------------
-    # token_dim current label (latest observed symbol/name win)
-    # ------------------------------------------------------------------
     @staticmethod
     def _a_label_object(*rows):
-        """rows: (hash, ts_seconds, ledger0, symbol0) -> A object with symbol columns."""
         header = (
             "hash,timestamp,action,pool_id,from,to,token0_id,token0_symbol,"
             "token1_id,token1_symbol,amount_token0,amount_token1,token0_change,"
@@ -4374,12 +4324,12 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
         content = (header + "\n" + "\n".join(lines) + "\n").encode()
         result = self._ingest("synthetic/0001_j34oz-oiaaa-aaaag-qcl3q-cai.csv", content)
         self.assertEqual(len(rows), result["rows_written"])
-        self.assertEqual(len(rows), len(self._facts()))  # fact rows published
+        self.assertEqual(len(rows), len(self._facts()))
         dim = self._dim_rows()
         self.assertEqual("ICP", dim["ryjl3-tyaaa-aaaaa-aaaba-cai"]["standard"])
         self.assertEqual("ICRC2", dim["mxzaz-hqaaa-aaaar-qaada-cai"]["standard"])
         self.assertEqual("ICRC2", dim["ph45x-riaaa-aaaak-afabq-cai"]["standard"])
-        self.assertEqual(12, dim["pa53d-4qaaa-aaaak-afaba-cai"]["decimals"])  # latest observation
+        self.assertEqual(12, dim["pa53d-4qaaa-aaaak-afaba-cai"]["decimals"])
         self.assertEqual("LUV", dim["6ohjj-4qaaa-aaaai-aapua-cai"]["symbol"])
         report = result["token_dim"]
         found = {(c["ledger_id"], c["attr"]): c for c in report["conflicts"]}
@@ -4403,7 +4353,6 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
             },
             found[("pa53d-4qaaa-aaaak-afaba-cai", "decimals")],
         )
-        # replay of the whole object: nothing new in either table
         dim_snapshot = self.catalog.load_table("synthetic.token_dim").current_snapshot().snapshot_id
         replay = self._ingest("synthetic/0001_j34oz-oiaaa-aaaag-qcl3q-cai.csv", content)
         self.assertEqual(0, replay["rows_written"])
@@ -4446,9 +4395,6 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
         ))
         self.assertEqual([], replay["token_dim"]["changed_ledgers"])
 
-    # ------------------------------------------------------------------
-    # pre-deploy review fixes
-    # ------------------------------------------------------------------
     def _warehouse_files(self, suffix):
         return sorted(str(p) for p in self.allowed_root.rglob(f"*{suffix}"))
 
@@ -4889,7 +4835,6 @@ class RegisteredSilverIngestionTests(unittest.TestCase):
 
 
 class ListingS3(SyntheticS3):
-    """SyntheticS3 plus the list/put calls the ``list`` and ``incremental`` modes use."""
 
     def __init__(self, objects):
         super().__init__(objects)

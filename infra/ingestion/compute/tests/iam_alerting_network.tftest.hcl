@@ -1,6 +1,3 @@
-# Offline checks (mock provider, no credentials) for the ingestion compute root: task IAM
-# scoping, the alerts topic policy, scheduler alerting, network defaults and the task definition.
-
 mock_provider "aws" {
   mock_data "aws_partition" {
     defaults = {
@@ -89,8 +86,6 @@ variables {
   image_tag   = "test-1"
 }
 
-# --- H1 / M4: S3 scoping ------------------------------------------------------------------------
-
 run "delete_is_confined_to_the_lock_sub_path" {
   command = plan
 
@@ -131,8 +126,6 @@ run "bucket_location_is_unconditioned_and_list_keeps_its_prefix_condition" {
   }
 }
 
-# --- B2 (ingestion side) / M3: alerts topic ------------------------------------------------------
-
 run "alerts_topic_events_publish_is_pinned_to_the_task_failed_rule_and_alarms_may_publish" {
   command = apply
 
@@ -156,8 +149,6 @@ run "alerts_topic_events_publish_is_pinned_to_the_task_failed_rule_and_alarms_ma
     error_message = "the new scheduler alarms need a CloudWatch publish statement with source conditions"
   }
 }
-
-# --- M5: scheduler alerting -------------------------------------------------------------------------
 
 run "scheduler_failures_and_missed_runs_raise_alarms" {
   command = apply
@@ -203,8 +194,6 @@ run "no_schedule_no_scheduler_alarms" {
   }
 }
 
-# --- M1: network defaults ---------------------------------------------------------------------------
-
 run "defaults_are_private_and_need_explicit_networking" {
   command = plan
 
@@ -246,8 +235,6 @@ run "malformed_subnet_ids_are_rejected" {
   expect_failures = [var.subnet_ids]
 }
 
-# --- M2: SIGTERM grace and the renamed scheduler variable -----------------------------------------------
-
 run "container_gets_a_120s_stop_timeout_and_scheduler_age_is_bounded" {
   command = apply
 
@@ -272,8 +259,6 @@ run "scheduler_event_age_below_60s_is_rejected" {
   expect_failures = [var.scheduler_maximum_event_age_seconds]
 }
 
-# --- H6: ECR and image tag -----------------------------------------------------------------------------
-
 run "ecr_is_immutable_and_force_deletable_and_task_uses_the_unique_tag" {
   command = apply
 
@@ -297,8 +282,6 @@ run "latest_is_rejected_as_image_tag" {
 
   expect_failures = [var.image_tag]
 }
-
-# --- M6 ---------------------------------------------------------------------------------------------------
 
 run "environment_tag_is_a_variable" {
   command = plan

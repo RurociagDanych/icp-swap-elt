@@ -3,6 +3,7 @@
 Runs the real dbt project against small Iceberg tables in a local SQLite-backed catalog (no AWS).
 Runnable without pytest: ``python3 test/test_quality_job.py``.
 """
+
 import datetime as dt
 import os
 import sys
@@ -102,7 +103,6 @@ class QualityJobTest(unittest.TestCase):
     def failing(self, report):
         return sorted(n for n, s in self.statuses(report).items() if s in ("fail", "error"))
 
-    # --- passing / reporting ---------------------------------------------------------------
 
     def test_clean_tables_pass_every_check(self):
         self.clean_data()
@@ -126,11 +126,10 @@ class QualityJobTest(unittest.TestCase):
         self.assertTrue(report["tables"]["token_dim"]["missing"])
         self.assertGreaterEqual(report["summary"]["warn"], 2)
 
-    # --- failures --------------------------------------------------------------------------
 
     def test_duplicate_event_id_fails_uniqueness_and_the_handler_raises(self):
         self.clean_data()
-        self.put_events([event(2)])  # same event_id again
+        self.put_events([event(2)])
         report = self.report()
         self.assertFalse(report["ok"])
         self.assertTrue(any("unique" in n and "event_id" in n for n in self.failing(report)), self.failing(report))
@@ -165,20 +164,21 @@ class QualityJobTest(unittest.TestCase):
         self.assertIn("icp_ledger_standard", self.failing(self.report()))
 
     def test_content_duplicates_inside_the_seam_window_warn_with_the_2s_tolerance(self):
-        """M13: the check mirrors seam_reconciliation's match rule (same content, timestamps
-        within DEFAULT_TOLERANCE_SECONDS = 2 s). It is WARN: the loaded columns cannot tell a
-        missed A/B pair from two genuine identical trades in the same seconds, and an error
-        severity would fail every later run forever on such legitimate data."""
+        """The check mirrors seam_reconciliation's match rule (same content, timestamps within 2 s).
+
+        It is WARN: the loaded columns cannot tell a missed A/B pair from two genuine identical
+        trades in the same seconds, and an error would fail every later run forever.
+        """
         seam = dt.datetime(2026, 6, 7, 3, 0, 0, tzinfo=dt.timezone.utc)
         self.put_events(
             [
                 event(1),
                 event(2, ts=seam),
-                event(3, ts=seam),  # exact-timestamp pair
+                event(3, ts=seam),
                 event(4, ts=seam + dt.timedelta(hours=1)),
-                event(5, ts=seam + dt.timedelta(hours=1, seconds=2)),  # within tolerance
+                event(5, ts=seam + dt.timedelta(hours=1, seconds=2)),
                 event(6, ts=seam + dt.timedelta(hours=2)),
-                event(7, ts=seam + dt.timedelta(hours=2, seconds=3)),  # outside tolerance
+                event(7, ts=seam + dt.timedelta(hours=2, seconds=3)),
             ]
         )
         self.put_dim([dim(ICP, "ICP"), dim("token-b")])
@@ -186,9 +186,8 @@ class QualityJobTest(unittest.TestCase):
         self.assertTrue(report["ok"], report)
         check = next(c for c in report["checks"] if c["name"] == "no_seam_content_duplicates")
         self.assertEqual(("warn", "warn"), (check["status"], check["severity"]))
-        self.assertEqual(2, check["failures"])  # the exact pair and the 2 s pair, not the 3 s one
+        self.assertEqual(2, check["failures"])
 
-    # --- warnings (reported, not fatal) ---------------------------------------------------
 
     def test_missing_days_and_flagged_rows_are_warnings_only(self):
         day = lambda n: NOW - dt.timedelta(days=n)  # noqa: E731
@@ -196,7 +195,7 @@ class QualityJobTest(unittest.TestCase):
             [
                 event(1, ts=day(0)),
                 event(2, ts=day(1)),
-                event(3, ts=day(4)),  # days 2 and 3 have no events
+                event(3, ts=day(4)),
                 event(4, ts=day(5), quality_status="conflict"),
                 event(5, ts=day(5), quality_status="unresolved"),
             ]
@@ -217,20 +216,17 @@ class QualityJobTest(unittest.TestCase):
         self.assertTrue(report["ok"], report)
         self.assertTrue(any("recent" in n and s == "warn" for n, s in self.statuses(report).items()))
 
-    # --- bounds -----------------------------------------------------------------------------
 
     def test_scan_caps_fail_closed_before_any_data_is_loaded(self):
         self.clean_data()
         os.environ["QUALITY_CHECK_MAX_SCAN_ROWS"] = "2"
         with self.assertRaisesRegex(quality_job.QualityCheckError, "cap exceeded") as caught:
             self.report()
-        # M10: the message names the measured size, the bound and the knob to change
         message = str(caught.exception)
         self.assertIn("rows=5", message)
         self.assertIn("QUALITY_CHECK_MAX_SCAN_ROWS=2", message)
         self.assertIn("whole table", message)
 
-    # --- time budget (M9) ----------------------------------------------------------------
 
     def test_dbt_phase_fails_clearly_when_too_little_time_is_left(self):
         import time

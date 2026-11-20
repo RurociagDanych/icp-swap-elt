@@ -2,8 +2,7 @@
 
 The backfill Map state collects one response per object; with the full ``token_dim`` readback
 and ledger lists the aggregate would exceed Step Functions' 256 KiB state-output limit
-(``States.DataLimitExceeded``). The response therefore carries the verification facts only;
-the full detail stays in the structured log line.
+(``States.DataLimitExceeded``). The full detail stays in the structured log line.
 """
 
 from __future__ import annotations
@@ -85,7 +84,6 @@ class BackfillResponseSizeTests(unittest.TestCase):
             self.assertGreater(full, 256 * 1024, "fixture must reproduce the overflow")
             if count == 72:
                 self.assertLess(aggregate, 256 * 1024, f"{count} objects: {aggregate} bytes")
-            # even 1500 objects stay at a bounded per-object cost
             self.assertLess(aggregate / count, 1200)
 
     def test_response_keeps_the_fields_verification_reads(self):
@@ -106,10 +104,10 @@ class BackfillResponseSizeTests(unittest.TestCase):
         dim = slim["token_dim"]
         self.assertEqual(987654321, dim["snapshot_id"])
         self.assertEqual(120, dim["conflicts_resolved"])
-        self.assertEqual(40, dim["changed_ledgers"])  # count, not the list
+        self.assertEqual(40, dim["changed_ledgers"])
         self.assertLessEqual(len(dim["conflicts"]), 3)
         self.assertNotIn("readback", dim)
-        self.assertEqual(40, dim["missing_attributes"])  # ledgers with a gap: count only
+        self.assertEqual(40, dim["missing_attributes"])
 
     def test_response_without_optional_parts_is_passed_through(self):
         minimal = {"key": "k", "rows_written": 0, "replayed": True, "token_dim": {}}
