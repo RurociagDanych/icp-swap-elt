@@ -39,14 +39,16 @@ Infrastructure:
 - TypeScript: strict, 2-space indentation, semicolons, single quotes, explicit types for exported helpers, `camelCase` for variables/functions, `PascalCase` for types/classes, short filenames like `csvSink.ts`, kebab-cased CLI flags (`--state-file`).
 - Python: follow the existing module style in `apps/transformation/src`; keep modules dependency-light and failure behavior fail-closed as documented in its README.
 - Formatters: `terraform fmt` for Terraform; no other formatter is configured.
-- Commit style: short imperative subjects, with a conventional type/scope when it improves clarity (`fix(lock): ...`, `feat(transformation): ...`). PRs describe the behavior changed, list the validation performed, and include sample commands or output paths when the change affects runtime behavior, storage layout, or Terraform.
-- Branch naming: prefixed branches such as `docs/...`, `fix/...`, `feat/...`, `chore/...`.
+- Commit style: Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`, `ci:`, optional scope such as `feat(transformation):`).
+- PR branches: use `feat/`, `fix/`, `docs/`, or `chore/` followed by a short lowercase kebab-case description (for example, `fix/ingestion-lock-timeout`). Branch from current `origin/main` and open the PR against `main` unless the task specifies another base.
+- PR titles: use `type(scope): short imperative summary` in English (for example, `fix(ingestion): release stale lock after run failure`). Choose the type for the change and the scope for the affected component, regardless of the branch prefix.
+- PR body: follow the default template at [`RurociagDanych/.github` (`PULL_REQUEST_TEMPLATE.md`)](https://github.com/RurociagDanych/.github/blob/main/.github/PULL_REQUEST_TEMPLATE.md) (`Summary`, `Changes`, `Not changed and why`, `Owner decisions applied`, `Verification`, `Open risks`), filling every section and removing HTML comments (include sample commands or output paths in `Verification` when runtime behavior, storage layout, or Terraform changes); never merge PRs (the owner merges).
 - Test locations: ingestion tests use Node's built-in `node:test` runner via `tsx` in `apps/ingestion/tests` and are named after the target module (`state.test.ts`); transformation tests are standalone scripts in `apps/transformation/test/test_*.py`; Terraform tests are `tests/*.tftest.hcl` in each root. For ingestion changes run `npm test` and `npm run build` at minimum. Transformation changes must pass `make test-python`. Pure logic should be unit-tested; network and S3 interaction is verified by running the pipeline.
 
 ## Guardrails
 
 - Secrets: do not commit Terraform state, credentials, filled-in `terraform.tfvars` or `backend.hcl`. Use the `terraform.tfvars.example` and `backend.hcl.example` files as starting points and prefer environment variables (`S3_BUCKET`, `S3_PREFIX`) for deployment-specific configuration. The Fargate task role and the Lambda roles are scoped to their buckets/prefixes; keep new IAM grants equally narrow.
-- Git: no force-push and no history rewrite.
+- Git: no force-push and no history rewrite on shared branches; never merge PRs (the owner merges).
 - Deletes: do not delete files, data or Terraform roots without owner approval.
 - Generated paths: local output is written to `out/` at runtime and must stay untracked, as must `node_modules/`, `dist/`, `.venv/` and `.terraform/`.
 - Lock files: `apps/ingestion/package-lock.json` and each root's committed `.terraform.lock.hcl` are authoritative. Bump the Terraform provider on purpose: `terraform init -upgrade`, review the plan, commit the lock file.
